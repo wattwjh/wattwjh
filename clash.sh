@@ -1,5 +1,5 @@
 #!/bin/bash
-# Python Xray Argo 一键部署脚本（修复版：含Clash支持+格式修正）
+# Python Xray Argo 一键部署脚本（全协议修复版）
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -9,10 +9,11 @@ NC='\033[0m'
 # 基础配置
 NODE_INFO_FILE="$HOME/.xray_nodes_info"
 PROJECT_DIR_NAME="python-xray-argo"
-CUSTOM_DOMAINS=""  # 自定义分流域名（全局变量）
-MULTI_UUIDS=""     # 多节点UUID（全局变量）
+CUSTOM_DOMAINS=""
+MULTI_UUIDS=""
+PROTOCOLS=("vless" "vmess" "trojan")  # 确保包含所有协议
 
-# 1. 工具函数：生成UUID
+# 工具函数：生成UUID
 generate_uuid() {
     if command -v uuidgen &> /dev/null; then
         uuidgen | tr '[:upper:]' '[:lower:]'
@@ -23,13 +24,32 @@ generate_uuid() {
     fi
 }
 
-# 2. 工具函数：检查服务PID
+# 工具函数：检查服务PID
 get_service_pid() {
     local service_key=$1
     pgrep -f "$service_key" | head -1
 }
 
-# 3. 子功能：Clash配置管理
+# 检查节点文件是否包含所有协议
+check_protocols_generated() {
+    local list_file="$1"
+    local missing=()
+    
+    for proto in "${PROTOCOLS[@]}"; do
+        if ! grep -qi "$proto://" "$list_file" 2>/dev/null; then
+            missing+=("$proto")
+        fi
+    done
+    
+    if [ ${#missing[@]} -eq 0 ]; then
+        return 0  # 所有协议都存在
+    else
+        echo "缺失协议节点: ${missing[*]}"
+        return 1  # 存在缺失
+    fi
+}
+
+# Clash配置管理
 clash_manage() {
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}               Clash 配置管理               ${NC}"
@@ -65,9 +85,9 @@ clash_manage() {
         3)
             if [ -f "clash_sub.txt" ]; then
                 local clash_sub=$(cat "clash_sub.txt")
-                echo -e "${GREEN}Clash 订阅链接（已复制到剪贴板，需安装xclip）：${NC}"
-                echo "$clash_sub" | xclip -selection clipboard 2>/dev/null || echo "$clash_sub"
-                [ $? -eq 0 ] && echo -e "${YELLOW}订阅链接已复制到剪贴板${NC}"
+                echo -e "${GREEN}Clash 订阅链接：${NC}"
+                echo "$clash_sub"
+                echo "$clash_sub" | xclip -selection clipboard 2>/dev/null && echo -e "${YELLOW}已复制到剪贴板${NC}"
             else
                 echo -e "${RED}Clash 订阅文件未生成${NC}"
             fi
@@ -76,7 +96,7 @@ clash_manage() {
     exit 0
 }
 
-# 4. 子功能：服务管理
+# 服务管理
 service_manage() {
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}               服务管理               ${NC}"
@@ -84,11 +104,10 @@ service_manage() {
     echo -e "${BLUE}1) 启动主服务${NC}"
     echo -e "${BLUE}2) 停止主服务${NC}"
     echo -e "${BLUE}3) 重启主服务${NC}"
-    echo -e "${BLUE}4) 停止保活服务${NC}"
+    echo -e "${BLUE}4) 重新生成所有节点${NC}"
     read -p "请输入选择 (1-4): " SERVICE_CHOICE
 
     local app_pid=$(get_service_pid "python3 app.py")
-    local keepalive_pid=$(get_service_pid "keep_alive_task.sh")
 
     case $SERVICE_CHOICE in
         1)
@@ -116,24 +135,25 @@ service_manage() {
             echo -e "${GREEN}主服务已重启（新PID: $(get_service_pid "python3 app.py")）${NC}"
             ;;
         4)
-            if [ -n "$keepalive_pid" ]; then
-                kill "$keepalive_pid" && rm -f keep_alive_status.log
-                echo -e "${GREEN}保活服务已停止（PID: $keepalive_pid）${NC}"
-            else
-                echo -e "${RED}保活服务未运行${NC}"
-            fi
+            echo -e "${BLUE}正在重新生成所有协议节点...${NC}"
+            [ -n "$app_pid" ] && kill "$app_pid" && sleep 2
+            [ -d "$PROJECT_DIR_NAME" ] && cd "$PROJECT_DIR_NAME"
+            rm -f list.txt sub.txt clash_config.yaml clash_sub.txt
+            nohup python3 app.py > app.log 2>&1 &
+            echo -e "${GREEN}节点重新生成中，PID: $(get_service_pid "python3 app.py")${NC}"
+            echo -e "${YELLOW}查看进度：tail -f $PROJECT_DIR_NAME/app.log${NC}"
             ;;
     esac
     exit 0
 }
 
-# 5. 子功能：日志操作
+# 日志操作
 log_manage() {
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}               日志操作               ${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo -e "${BLUE}1) 实时查看主服务日志${NC}"
-    echo -e "${BLUE}2) 查看保活状态日志${NC}"
+    echo -e "${BLUE}2) 查看节点生成日志${NC}"
     echo -e "${BLUE}3) 清理所有日志文件${NC}"
     read -p "请输入选择 (1-3): " LOG_CHOICE
 
@@ -148,75 +168,52 @@ log_manage() {
             tail -f "$log_dir/app.log"
             ;;
         2)
-            if [ -f "$log_dir/keep_alive_status.log" ]; then
-                cat "$log_dir/keep_alive_status.log"
-            else
-                echo -e "${RED}保活日志不存在（路径：$log_dir/keep_alive_status.log）${NC}"
-            fi
+            echo -e "${YELLOW}--- 节点生成记录 ---${NC}"
+            grep -E "saved successfully|generate_links|clash_config" "$log_dir/app.log"
             ;;
         3)
             rm -f "$log_dir/app.log" "$log_dir/keep_alive_status.log"
-            echo -e "${GREEN}所有日志已清理（路径：$log_dir）${NC}"
+            echo -e "${GREEN}所有日志已清理${NC}"
             ;;
     esac
     exit 0
 }
 
-# 6. 主脚本入口
+# 主脚本入口
 clear
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}    Python Xray Argo 一键部署脚本（修复版）   ${NC}"
+echo -e "${GREEN}    Python Xray Argo 一键部署脚本（全协议版）   ${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo
-echo -e "${BLUE}支持协议：VLESS/VMESS/Trojan（兼容Clash客户端）${NC}"
-echo -e "${BLUE}核心功能：Clash配置生成、多节点管理、服务运维${NC}"
+echo -e "${BLUE}支持协议：${PROTOCOLS[*]}（自动生成所有协议节点）${NC}"
+echo -e "${BLUE}附加功能：Clash配置、多节点、自定义分流${NC}"
 echo
 
 # 主菜单
 echo -e "${YELLOW}请选择操作:${NC}"
-echo -e "${BLUE}1) 极速模式 - 只修改UUID并启动${NC}"
-echo -e "${BLUE}2) 完整模式 - 详细配置（多节点/分流/Clash）${NC}"
-echo -e "${BLUE}3) Clash 管理 - 查看/导出Clash配置${NC}"
-echo -e "${BLUE}4) 服务管理 - 启停/重启主服务/保活服务${NC}"
-echo -e "${BLUE}5) 日志操作 - 查看/清理服务日志${NC}"
-echo -e "${BLUE}6) 查看节点信息 - 显示已保存的节点信息${NC}"
-echo -e "${BLUE}7) 查看保活状态 - 检查Hugging Face API保活状态${NC}"
+echo -e "${BLUE}1) 极速模式 - 快速部署（默认配置）${NC}"
+echo -e "${BLUE}2) 完整模式 - 自定义配置（推荐）${NC}"
+echo -e "${BLUE}3) Clash 管理 - 查看/导出配置${NC}"
+echo -e "${BLUE}4) 服务管理 - 启停/重启/重新生成节点${NC}"
+echo -e "${BLUE}5) 日志操作 - 查看/清理日志${NC}"
+echo -e "${BLUE}6) 查看节点信息 - 显示所有协议节点${NC}"
 echo
-read -p "请输入选择 (1-7): " MODE_CHOICE
+read -p "请输入选择 (1-6): " MODE_CHOICE
 
 # 菜单分支处理
 case $MODE_CHOICE in
     3) clash_manage ;;
     4) service_manage ;;
     5) log_manage ;;
-    7)
-        echo -e "${GREEN}========================================${NC}"
-        echo -e "${GREEN}               Hugging Face API 保活状态检查              ${NC}"
-        echo -e "${GREEN}========================================${NC}"
-        if [ -d "$PROJECT_DIR_NAME" ]; then cd "$PROJECT_DIR_NAME"; fi
-        local keepalive_pid=$(get_service_pid "keep_alive_task.sh")
-        if [ -n "$keepalive_pid" ]; then
-            echo -e "服务状态: ${GREEN}运行中${NC}"
-            echo -e "进程PID: ${BLUE}$keepalive_pid${NC}"
-            if [ -f "keep_alive_task.sh" ]; then
-                local repo_id=$(grep 'huggingface.co/api/spaces/' keep_alive_task.sh | head -1 | sed -n 's|.*api/spaces/\([^"]*\).*|\1|p')
-                echo -e "目标仓库: ${YELLOW}$repo_id (类型: Space)${NC}"
-            fi
-            echo -e "\n${YELLOW}--- 最近一次保活状态 ---${NC}"
-            [ -f "keep_alive_status.log" ] && cat "keep_alive_status.log" || echo -e "${YELLOW}尚未生成状态日志（最多等2分钟）${NC}"
-        else
-            echo -e "服务状态: ${RED}未运行${NC}"
-            echo -e "${YELLOW}提示: 需在部署时设置Hugging Face保活${NC}"
-        fi
-        exit 0
-        ;;
     6)
         if [ -f "$NODE_INFO_FILE" ]; then
             echo -e "${GREEN}========================================${NC}"
-            echo -e "${GREEN}                      节点信息查看                      ${NC}"
+            echo -e "${GREEN}               所有协议节点信息               ${NC}"
             echo -e "${GREEN}========================================${NC}"
             cat "$NODE_INFO_FILE"
-            echo -e "${YELLOW}提示: Clash配置路径：$PROJECT_DIR_NAME/clash_config.yaml${NC}"
+            echo -e "\n${YELLOW}检查协议完整性:${NC}"
+            check_protocols_generated "$PROJECT_DIR_NAME/list.txt" || \
+                echo -e "${RED}注意：部分协议节点缺失，请通过菜单4重新生成${NC}"
         else
             echo -e "${RED}未找到节点信息文件${NC}"
             read -p "是否现在部署? (y/n): " start_deploy
@@ -231,7 +228,7 @@ if [ "$MODE_CHOICE" != "1" ] && [ "$MODE_CHOICE" != "2" ]; then
     exit 0
 fi
 
-# 7. 依赖安装
+# 依赖安装
 echo -e "${BLUE}检查并安装依赖...${NC}"
 if ! command -v python3 &> /dev/null; then
     echo -e "${YELLOW}安装Python3...${NC}"
@@ -253,10 +250,10 @@ if [ ! -d "$PROJECT_DIR_NAME" ]; then
 fi
 cd "$PROJECT_DIR_NAME"
 [ ! -f "app.py" ] && echo -e "${RED}未找到app.py${NC}" && exit 1
-cp app.py app.py.backup_"$(date +%Y%m%d_%H%M)"  # 配置自动备份
+cp app.py app.py.backup_"$(date +%Y%m%d_%H%M)"
 echo -e "${GREEN}依赖安装完成！${NC}"
 
-# 8. 保活配置
+# 保活配置
 KEEP_ALIVE_HF="false"
 HF_TOKEN=""
 HF_REPO_ID=""
@@ -275,10 +272,10 @@ configure_hf_keep_alive() {
     fi
 }
 
-# 9. 部署配置（支持多节点+自定义分流）
+# 部署配置（强化协议节点生成）
 echo -e "${BLUE}=== $( [ "$MODE_CHOICE" = "1" ] && echo "极速模式" || echo "完整模式" ) ===${NC}"
 
-# 9.1 UUID配置（多节点支持）
+# UUID配置
 current_uuid=$(grep "UUID = " app.py | head -1 | cut -d"'" -f2)
 echo -e "${YELLOW}当前UUID: $current_uuid${NC}"
 if [ "$MODE_CHOICE" = "2" ]; then
@@ -304,7 +301,7 @@ else
     echo -e "${GREEN}UUID已设置: $uuid_input${NC}"
 fi
 
-# 9.2 完整模式额外配置（自定义分流）
+# 完整模式额外配置
 if [ "$MODE_CHOICE" = "2" ]; then
     current_name=$(grep "NAME = " app.py | head -1 | cut -d"'" -f4)
     read -p "输入节点名称（当前: $current_name，留空不变）: " name_input
@@ -333,51 +330,106 @@ if [ "$MODE_CHOICE" = "2" ]; then
         configure_hf_keep_alive
     fi
 else
-    # 极速模式：自动配置优选IP+保活
+    # 极速模式：自动配置
     sed -i "s/CFIP = os.environ.get('CFIP', '[^']*')/CFIP = os.environ.get('CFIP', 'joeyblog.net')/" app.py
     echo -e "${GREEN}优选IP已设置: joeyblog.net${NC}"
     configure_hf_keep_alive
 fi
 
-# 10. 生成YouTube分流+Clash配置（核心功能）
-echo -e "${BLUE}生成YouTube分流+Clash配置...${NC}"
-cat > youtube_patch.py << 'EOF'
+# 生成所有协议节点和Clash配置（核心修复部分）
+echo -e "${BLUE}生成所有协议节点（${PROTOCOLS[*]}）和Clash配置...${NC}"
+cat > protocol_patch.py << 'EOF'
 #!/usr/bin/env python3
-# coding: utf-8
 import os, base64, json, subprocess, time
 
-# 读取全局变量（从环境变量获取）
+# 从环境变量获取配置
 multi_uuids = os.environ.get('MULTI_UUIDS', '')
 custom_domains = os.environ.get('CUSTOM_DOMAINS', '')
+protocols = os.environ.get('PROTOCOLS', 'vless,vmess,trojan').split(',')
 
-# 函数1：生成Clash YAML配置
-def generate_clash_yaml(argo_domain, uuid_list, cfip, cfport, name):
-    # 获取ISP信息
+# 生成所有协议节点
+def generate_all_protocols(argo_domain, uuid_list, cfip, cfport, name):
     meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
     meta_info = meta_info.stdout.split('"') if meta_info.stdout else ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Unknown", "", "", "", "", "", "", "", "Unknown"]
     isp = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-
-    # 1. 生成多节点配置
-    proxies = "proxies:\n"
+    
+    list_txt = ""
     uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
+    
     for i, uuid in enumerate(uuid_arr, 1):
         if not uuid: continue
-        # VLESS-TLS
-        proxies += f'  - name: "{name}-{isp}-VLESS-TLS-{i}"\n    type: vless\n    server: {cfip}\n    port: {cfport}\n    uuid: {uuid}\n    encryption: none\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/vless-argo?ed=2560"\n      host: {argo_domain}\n\n'
-        # VMESS-80
-        proxies += f'  - name: "{name}-{isp}-VMESS-80-{i}"\n    type: vmess\n    server: {cfip}\n    port: 80\n    uuid: {uuid}\n    alterId: 0\n    cipher: auto\n    tls: false\n    network: ws\n    ws-opts:\n      path: "/vmess-argo?ed=2560"\n      host: {argo_domain}\n\n'
-        # Trojan-TLS
-        proxies += f'  - name: "{name}-{isp}-Trojan-TLS-{i}"\n    type: trojan\n    server: {cfip}\n    port: {cfport}\n    password: {uuid}\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/trojan-argo?ed=2560"\n      host: {argo_domain}\n\n'
+        
+        # 生成VLESS节点
+        if 'vless' in protocols:
+            # VLESS-TLS
+            list_txt += f"vless://{uuid}@{cfip}:{cfport}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-TLS-{i}\n\n"
+            # VLESS-80
+            list_txt += f"vless://{uuid}@{cfip}:80?encryption=none&security=none&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-80-{i}\n\n"
+        
+        # 生成VMESS节点
+        if 'vmess' in protocols:
+            # VMESS-TLS
+            vmess_tls = {
+                "v": "2", "ps": f"{name}-{isp}-VMESS-TLS-{i}",
+                "add": cfip, "port": cfport, "id": uuid,
+                "aid": "0", "scy": "none", "net": "ws",
+                "type": "none", "host": argo_domain,
+                "path": "/vmess-argo?ed=2560", "tls": "tls",
+                "sni": argo_domain, "alpn": "", "fp": "chrome"
+            }
+            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_tls).encode('utf-8')).decode('utf-8')}\n\n"
+            
+            # VMESS-80
+            vmess_80 = {
+                "v": "2", "ps": f"{name}-{isp}-VMESS-80-{i}",
+                "add": cfip, "port": "80", "id": uuid,
+                "aid": "0", "scy": "none", "net": "ws",
+                "type": "none", "host": argo_domain,
+                "path": "/vmess-argo?ed=2560", "tls": ""
+            }
+            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_80).encode('utf-8')).decode('utf-8')}\n\n"
+        
+        # 生成Trojan节点
+        if 'trojan' in protocols:
+            # Trojan-TLS
+            list_txt += f"trojan://{uuid}@{cfip}:{cfport}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-TLS-{i}\n\n"
+            # Trojan-80
+            list_txt += f"trojan://{uuid}@{cfip}:80?security=none&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-80-{i}\n\n"
+    
+    return list_txt, isp
 
-    # 2. 代理组配置
-    proxy_groups = f'''proxy-groups:
+# 生成Clash配置
+def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):
+    proxies = "proxies:\n"
+    uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
+    
+    for i, uuid in enumerate(uuid_arr, 1):
+        if not uuid: continue
+        
+        if 'vless' in protocols:
+            proxies += f'  - name: "{name}-{isp}-VLESS-TLS-{i}"\n    type: vless\n    server: {cfip}\n    port: {cfport}\n    uuid: {uuid}\n    encryption: none\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/vless-argo?ed=2560"\n      host: {argo_domain}\n\n'
+        
+        if 'vmess' in protocols:
+            proxies += f'  - name: "{name}-{isp}-VMESS-TLS-{i}"\n    type: vmess\n    server: {cfip}\n    port: {cfport}\n    uuid: {uuid}\n    alterId: 0\n    cipher: auto\n    tls: true\n    network: ws\n    ws-opts:\n      path: "/vmess-argo?ed=2560"\n      host: {argo_domain}\n\n'
+        
+        if 'trojan' in protocols:
+            proxies += f'  - name: "{name}-{isp}-Trojan-TLS-{i}"\n    type: trojan\n    server: {cfip}\n    port: {cfport}\n    password: {uuid}\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/trojan-argo?ed=2560"\n      host: {argo_domain}\n\n'
+    
+    # 代理组和规则
+    proxy_groups = '''proxy-groups:
   - name: "自动选择"
     type: url-test
     proxies:
 '''
     for i, uuid in enumerate(uuid_arr, 1):
         if not uuid: continue
-        proxy_groups += f'      - "{name}-{isp}-VLESS-TLS-{i}"\n      - "{name}-{isp}-VMESS-80-{i}"\n      - "{name}-{isp}-Trojan-TLS-{i}"\n'
+        if 'vless' in protocols:
+            proxy_groups += f'      - "{name}-{isp}-VLESS-TLS-{i}"\n'
+        if 'vmess' in protocols:
+            proxy_groups += f'      - "{name}-{isp}-VMESS-TLS-{i}"\n'
+        if 'trojan' in protocols:
+            proxy_groups += f'      - "{name}-{isp}-Trojan-TLS-{i}"\n'
+    
     proxy_groups += '''    url: "http://www.gstatic.com/generate_204"
     interval: 300
   - name: "全局代理"
@@ -385,59 +437,35 @@ def generate_clash_yaml(argo_domain, uuid_list, cfip, cfport, name):
     proxies:
       - "自动选择"
       - "DIRECT"
-  - name: "YouTube 分流"
-    type: select
-    proxies:
-      - "自动选择"
-      - "DIRECT"
 '''
 
-    # 3. 分流规则（含自定义域名）
     rules = '''rules:
-  # YouTube分流
-  - DOMAIN-SUFFIX,youtube.com,YouTube 分流
-  - DOMAIN-SUFFIX,youtu.be,YouTube 分流
-  - DOMAIN-SUFFIX,googlevideo.com,YouTube 分流
+  - DOMAIN-SUFFIX,youtube.com,自动选择
+  - DOMAIN-SUFFIX,youtu.be,自动选择
+  - DOMAIN-SUFFIX,googlevideo.com,自动选择
 '''
-    # 添加自定义分流
     if custom_domains:
         for domain in custom_domains.split(','):
-            rules += f'  - DOMAIN-SUFFIX,{domain.strip()},全局代理\n'
-    # 默认规则
-    rules += '''  # 国内直连
-  - DOMAIN-SUFFIX,baidu.com,DIRECT
+            rules += f'  - DOMAIN-SUFFIX,{domain.strip()},自动选择\n'
+    rules += '''  - DOMAIN-SUFFIX,baidu.com,DIRECT
   - DOMAIN-SUFFIX,qq.com,DIRECT
   - GEOIP,CN,DIRECT
-  # 兜底规则
   - MATCH,全局代理
 '''
 
-    # 合并并写入文件
     clash_yaml = proxies + proxy_groups + rules
     with open('clash_config.yaml', 'w', encoding='utf-8') as f:
         f.write(clash_yaml)
-    # 生成Clash订阅（base64编码）
-    clash_sub = base64.b64encode(clash_yaml.encode('utf-8')).decode('utf-8')
     with open('clash_sub.txt', 'w', encoding='utf-8') as f:
-        f.write(clash_sub)
-    print(f"Clash配置生成完成：clash_config.yaml")
-    print(f"Clash订阅生成完成：clash_sub.txt")
-    return clash_yaml, clash_sub
+        f.write(base64.b64encode(clash_yaml.encode('utf-8')).decode('utf-8'))
 
-# 函数2：修改app.py（YouTube分流+多节点支持）
+# 修改app.py确保所有协议节点被生成
 def patch_app_py():
     with open('app.py', 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # 替换Xray配置（含YouTube分流）
-    old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
-    new_config = '''config = {
-        "log": {
-            "access": "/dev/null",
-            "error": "/dev/null",
-            "loglevel": "none"
-        },
-        "inbounds": [
+    # 确保所有协议的入站配置存在
+    inbound_config = '''"inbounds": [
             {
                 "port": ARGO_PORT,
                 "protocol": "vless",
@@ -457,195 +485,204 @@ def patch_app_py():
                 "port": 3001,
                 "listen": "127.0.0.1",
                 "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID}],
-                    "decryption": "none"
-                },
+                "settings": {"clients": [{"id": UUID}], "decryption": "none"},
                 "streamSettings": {"network": "ws", "security": "none"}
             },
             {
                 "port": 3002,
                 "listen": "127.0.0.1",
                 "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID, "level": 0}],
-                    "decryption": "none"
-                },
+                "settings": {"clients": [{"id": UUID, "level": 0}], "decryption": "none"},
                 "streamSettings": {
                     "network": "ws",
                     "security": "none",
                     "wsSettings": {"path": "/vless-argo"}
                 },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
             },
             {
                 "port": 3003,
                 "listen": "127.0.0.1",
                 "protocol": "vmess",
-                "settings": {
-                    "clients": [{"id": UUID, "alterId": 0}]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "wsSettings": {"path": "/vmess-argo"}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
+                "settings": {"clients": [{"id": UUID, "alterId": 0}]},
+                "streamSettings": {"network": "ws", "wsSettings": {"path": "/vmess-argo"}},
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
             },
             {
                 "port": 3004,
                 "listen": "127.0.0.1",
                 "protocol": "trojan",
-                "settings": {
-                    "clients": [{"password": UUID}]
-                },
+                "settings": {"clients": [{"password": UUID}]},
                 "streamSettings": {
                     "network": "ws",
                     "security": "none",
                     "wsSettings": {"path": "/trojan-argo"}
                 },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
             }
-        ],
-        "outbounds": [
-            {"protocol": "freedom", "tag": "direct"},
-            {
-                "protocol": "vmess",
-                "tag": "youtube",
-                "settings": {
-                    "vnext": [{
-                        "address": "172.233.171.224",
-                        "port": 16416,
-                        "users": [{
-                            "id": "8c1b9bea-cb51-43bb-a65c-0af31bbbf145",
-                            "alterId": 0
-                        }]
-                    }]
-                },
-                "streamSettings": {"network": "tcp"}
-            },
-            {"protocol": "blackhole", "tag": "block"}
-        ],
-        "routing": {
-            "domainStrategy": "IPIfNonMatch",
-            "rules": [
-                {
-                    "type": "field",
-                    "domain": [
-                        "youtube.com", "youtu.be",
-                        "googlevideo.com", "ytimg.com",
-                        "gstatic.com", "googleapis.com"
-                    ],
-                    "outboundTag": "youtube"
-                }
-            ]
-        }
-    }'''
-    content = content.replace(old_config, new_config)
+        ]'''
+    
+    # 替换入站配置
+    content = content.replace(
+        content[content.find('"inbounds": ['):content.find('"outbounds": [')],
+        inbound_config
+    )
 
-    # 替换generate_links函数（支持多节点+Clash）
-    old_generate = '''# Generate links and subscription content
-async def generate_links(argo_domain):
-    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
-    meta_info = meta_info.stdout.split('"')
-    ISP = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-    time.sleep(2)
-    VMESS = {"v": "2", "ps": f"{NAME}-{ISP}", "add": CFIP, "port": CFPORT, "id": UUID, "aid": "0", "scy": "none", "net": "ws", "type": "none", "host": argo_domain, "path": "/vmess-argo?ed=2560", "tls": "tls", "sni": argo_domain, "alpn": "", "fp": "chrome"}
-    list_txt = f"""
-vless://{UUID}@{CFIP}:{CFPORT}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{NAME}-{ISP}
-  
-vmess://{ base64.b64encode(json.dumps(VMESS).encode('utf-8')).decode('utf-8')}
-trojan://{UUID}@{CFIP}:{CFPORT}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{NAME}-{ISP}
-    """
+    # 替换节点生成函数
+    new_generate_links = '''async def generate_links(argo_domain):
+    from protocol_generator import generate_all_protocols, generate_clash_config
+    import os, base64, json
     
-    with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
-        list_file.write(list_txt)
-    sub_txt = base64.b64encode(list_txt.encode('utf-8')).decode('utf-8')
-    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
-        sub_file.write(sub_txt)
-        
-    print(sub_txt)
-    
-    print(f"{FILE_PATH}/sub.txt saved successfully")
-    
-    # Additional actions
-    send_telegram()
-    upload_nodes()
-    return sub_txt'''
-    new_generate = '''# Generate links and subscription content
-async def generate_links(argo_domain):
     meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
     meta_info = meta_info.stdout.split('"') if meta_info.stdout else ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Unknown", "", "", "", "", "", "", "", "Unknown"]
     ISP = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
     time.sleep(2)
     
-    # 生成多节点配置
-    list_txt = ""
+    # 获取多节点UUID
     multi_uuids = os.environ.get('MULTI_UUIDS', '')
-    uuid_arr = multi_uuids.split(',') if multi_uuids else [UUID]
-    for i, uuid in enumerate(uuid_arr, 1):
-        if not uuid: continue
-        # VLESS-TLS
-        list_txt += f"vless://{uuid}@{CFIP}:{CFPORT}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{NAME}-{ISP}-TLS-{i}\\n\\n"
-        # VMESS-TLS
-        vmess_tls = {"v": "2", "ps": f"{NAME}-{ISP}-VMESS-TLS-{i}", "add": CFIP, "port": CFPORT, "id": uuid, "aid": "0", "scy": "none", "net": "ws", "type": "none", "host": argo_domain, "path": "/vmess-argo?ed=2560", "tls": "tls", "sni": argo_domain, "alpn": "", "fp": "chrome"}
-        list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_tls).encode('utf-8')).decode('utf-8')}\\n\\n"
-        # Trojan-TLS
-        list_txt += f"trojan://{uuid}@{CFIP}:{CFPORT}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{NAME}-{ISP}-TLS-{i}\\n\\n"
-        # VLESS-80（无TLS）
-        list_txt += f"vless://{uuid}@{CFIP}:80?encryption=none&security=none&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{NAME}-{ISP}-80-{i}\\n\\n"
-        # VMESS-80（无TLS）
-        vmess_80 = {"v": "2", "ps": f"{NAME}-{ISP}-VMESS-80-{i}", "add": CFIP, "port": "80", "id": uuid, "aid": "0", "scy": "none", "net": "ws", "type": "none", "host": argo_domain, "path": "/vmess-argo?ed=2560", "tls": "", "sni": "", "alpn": "", "fp": ""}
-        list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_80).encode('utf-8')).decode('utf-8')}\\n\\n"
-        # Trojan-80（无TLS）
-        list_txt += f"trojan://{uuid}@{CFIP}:80?security=none&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{NAME}-{ISP}-80-{i}\\n\\n"
+    uuid_list = multi_uuids if multi_uuids else UUID
     
-    # 写入节点列表和订阅
-    with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
-        list_file.write(list_txt)
+    # 生成所有协议节点
+    list_txt, isp = generate_all_protocols(argo_domain, uuid_list, CFIP, CFPORT, NAME)
+    
+    # 写入节点文件
+    with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as f:
+        f.write(list_txt)
     sub_txt = base64.b64encode(list_txt.encode('utf-8')).decode('utf-8')
-    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
-        sub_file.write(sub_txt)
+    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as f:
+        f.write(sub_txt)
     
     # 生成Clash配置
-    from __main__ import generate_clash_yaml
-    generate_clash_yaml(argo_domain, multi_uuids if multi_uuids else UUID, CFIP, CFPORT, NAME)
+    generate_clash_config(argo_domain, uuid_list, CFIP, CFPORT, NAME, isp)
     
-    print(sub_txt)
-    print(f"{FILE_PATH}/sub.txt saved successfully")
-    
-    # Additional actions
-    send_telegram()
-    upload_nodes()
+    print(f"所有协议节点生成完成: {os.path.join(FILE_PATH, 'list.txt')}")
+    print(f"订阅链接已保存: {os.path.join(FILE_PATH, 'sub.txt')}")
     return sub_txt'''
-    content = content.replace(old_generate, new_generate)
+    
+    # 替换原有函数
+    content = content.replace(
+        content[content.find('async def generate_links(argo_domain):'):content.find('async def send_telegram():')],
+        new_generate_links
+    )
 
-    # 写入修改后的app.py
     with open('app.py', 'w', encoding='utf-8') as f:
         f.write(content)
-    print("app.py修改完成（YouTube分流+多节点支持）")
+    
+    # 保存协议生成器
+    with open('protocol_generator.py', 'w', encoding='utf-8') as f:
+        f.write('''import os, base64, json, subprocess, time
 
-# 执行补丁
+def generate_all_protocols(argo_domain, uuid_list, cfip, cfport, name):
+    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
+    meta_info = meta_info.stdout.split('"') if meta_info.stdout else ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Unknown", "", "", "", "", "", "", "", "Unknown"]
+    isp = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
+    
+    list_txt = ""
+    uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
+    protocols = os.environ.get('PROTOCOLS', 'vless,vmess,trojan').split(',')
+    
+    for i, uuid in enumerate(uuid_arr, 1):
+        if not uuid: continue
+        
+        if 'vless' in protocols:
+            list_txt += f"vless://{uuid}@{cfip}:{cfport}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-TLS-{i}\\n\\n"
+            list_txt += f"vless://{uuid}@{cfip}:80?encryption=none&security=none&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-80-{i}\\n\\n"
+        
+        if 'vmess' in protocols:
+            vmess_tls = {
+                "v": "2", "ps": f"{name}-{isp}-VMESS-TLS-{i}",
+                "add": cfip, "port": cfport, "id": uuid,
+                "aid": "0", "scy": "none", "net": "ws",
+                "type": "none", "host": argo_domain,
+                "path": "/vmess-argo?ed=2560", "tls": "tls",
+                "sni": argo_domain, "alpn": "", "fp": "chrome"
+            }
+            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_tls).encode('utf-8')).decode('utf-8')}\\n\\n"
+            
+            vmess_80 = {
+                "v": "2", "ps": f"{name}-{isp}-VMESS-80-{i}",
+                "add": cfip, "port": "80", "id": uuid,
+                "aid": "0", "scy": "none", "net": "ws",
+                "type": "none", "host": argo_domain,
+                "path": "/vmess-argo?ed=2560", "tls": ""
+            }
+            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_80).encode('utf-8')).decode('utf-8')}\\n\\n"
+        
+        if 'trojan' in protocols:
+            list_txt += f"trojan://{uuid}@{cfip}:{cfport}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-TLS-{i}\\n\\n"
+            list_txt += f"trojan://{uuid}@{cfip}:80?security=none&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-80-{i}\\n\\n"
+    
+    return list_txt, isp
+
+def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):
+    proxies = "proxies:\\n"
+    uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
+    protocols = os.environ.get('PROTOCOLS', 'vless,vmess,trojan').split(',')
+    
+    for i, uuid in enumerate(uuid_arr, 1):
+        if not uuid: continue
+        
+        if 'vless' in protocols:
+            proxies += f'  - name: "{name}-{isp}-VLESS-TLS-{i}"\\n    type: vless\\n    server: {cfip}\\n    port: {cfport}\\n    uuid: {uuid}\\n    encryption: none\\n    tls: true\\n    servername: {argo_domain}\\n    fp: chrome\\n    network: ws\\n    ws-opts:\\n      path: "/vless-argo?ed=2560"\\n      host: {argo_domain}\\n\\n'
+        
+        if 'vmess' in protocols:
+            proxies += f'  - name: "{name}-{isp}-VMESS-TLS-{i}"\\n    type: vmess\\n    server: {cfip}\\n    port: {cfport}\\n    uuid: {uuid}\\n    alterId: 0\\n    cipher: auto\\n    tls: true\\n    network: ws\\n    ws-opts:\\n      path: "/vmess-argo?ed=2560"\\n      host: {argo_domain}\\n\\n'
+        
+        if 'trojan' in protocols:
+            proxies += f'  - name: "{name}-{isp}-Trojan-TLS-{i}"\\n    type: trojan\\n    server: {cfip}\\n    port: {cfport}\\n    password: {uuid}\\n    tls: true\\n    servername: {argo_domain}\\n    fp: chrome\\n    network: ws\\n    ws-opts:\\n      path: "/trojan-argo?ed=2560"\\n      host: {argo_domain}\\n\\n'
+    
+    proxy_groups = '''proxy-groups:
+  - name: "自动选择"
+    type: url-test
+    proxies:
+'''
+    for i, uuid in enumerate(uuid_arr, 1):
+        if not uuid: continue
+        if 'vless' in protocols:
+            proxy_groups += f'      - "{name}-{isp}-VLESS-TLS-{i}"\\n'
+        if 'vmess' in protocols:
+            proxy_groups += f'      - "{name}-{isp}-VMESS-TLS-{i}"\\n'
+        if 'trojan' in protocols:
+            proxy_groups += f'      - "{name}-{isp}-Trojan-TLS-{i}"\\n'
+    
+    proxy_groups += '''    url: "http://www.gstatic.com/generate_204"
+    interval: 300
+  - name: "全局代理"
+    type: select
+    proxies:
+      - "自动选择"
+      - "DIRECT"
+'''
+
+    rules = '''rules:
+  - DOMAIN-SUFFIX,youtube.com,自动选择
+  - DOMAIN-SUFFIX,youtu.be,自动选择
+  - DOMAIN-SUFFIX,googlevideo.com,自动选择
+'''
+    custom_domains = os.environ.get('CUSTOM_DOMAINS', '')
+    if custom_domains:
+        for domain in custom_domains.split(','):
+            rules += f'  - DOMAIN-SUFFIX,{domain.strip()},自动选择\\n'
+    rules += '''  - DOMAIN-SUFFIX,baidu.com,DIRECT
+  - DOMAIN-SUFFIX,qq.com,DIRECT
+  - GEOIP,CN,DIRECT
+  - MATCH,全局代理
+'''
+
+    clash_yaml = proxies + proxy_groups + rules
+    with open('clash_config.yaml', 'w', encoding='utf-8') as f:
+        f.write(clash_yaml)
+    with open('clash_sub.txt', 'w', encoding='utf-8') as f:
+        f.write(base64.b64encode(clash_yaml.encode('utf-8')).decode('utf-8'))''')
+
 if __name__ == "__main__":
     patch_app_py()
 EOF
 
-# 传递环境变量并执行补丁脚本（确保Clash生成函数获取到多节点和自定义分流参数）
-MULTI_UUIDS="$MULTI_UUIDS" CUSTOM_DOMAINS="$CUSTOM_DOMAINS" python3 youtube_patch.py && rm youtube_patch.py
-echo -e "${GREEN}YouTube分流+Clash配置集成完成！${NC}"
+# 传递环境变量并执行补丁（确保所有协议被包含）
+MULTI_UUIDS="$MULTI_UUIDS" CUSTOM_DOMAINS="$CUSTOM_DOMAINS" PROTOCOLS="${PROTOCOLS[*]}" python3 protocol_patch.py && echo -e "${GREEN}协议节点生成逻辑已注入${NC}"
 
-# 11. 服务启动
+# 服务启动
 echo -e "${BLUE}启动服务...${NC}"
 pkill -f "python3 app.py" > /dev/null 2>&1
 sleep 2
@@ -659,24 +696,21 @@ if [ -z "$APP_PID" ] || [ "$APP_PID" -eq 0 ]; then
 fi
 echo -e "${GREEN}主服务已启动（PID: $APP_PID）${NC}"
 
-# 12. 保活服务启动
-KEEPALIVE_PID=""
+# 保活服务
 if [ "$KEEP_ALIVE_HF" = "true" ]; then
     echo -e "${BLUE}启动Hugging Face保活服务...${NC}"
     cat > keep_alive_task.sh << EOF
 #!/bin/bash
 while true; do
-    # 尝试Spaces API
     status_code=\$(curl -s -o /dev/null -w "%{http_code}" --header "Authorization: Bearer $HF_TOKEN" "https://huggingface.co/api/spaces/$HF_REPO_ID")
     if [ "\$status_code" -eq 200 ]; then
         echo "Hugging Face保活成功（Space: $HF_REPO_ID）- \$(date '+%Y-%m-%d %H:%M:%S')" > keep_alive_status.log
     else
-        # 尝试Models API
         status_code_model=\$(curl -s -o /dev/null -w "%{http_code}" --header "Authorization: Bearer $HF_TOKEN" "https://huggingface.co/api/models/$HF_REPO_ID")
         if [ "\$status_code_model" -eq 200 ]; then
             echo "Hugging Face保活成功（Model: $HF_REPO_ID）- \$(date '+%Y-%m-%d %H:%M:%S')" > keep_alive_status.log
         else
-            echo "Hugging Face保活失败（Space状态: \$status_code, Model状态: \$status_code_model）- \$(date '+%Y-%m-%d %H:%M:%S')" > keep_alive_status.log
+            echo "Hugging Face保活失败（状态码: \$status_code）- \$(date '+%Y-%m-%d %H:%M:%S')" > keep_alive_status.log
         fi
     fi
     sleep 120
@@ -684,29 +718,33 @@ done
 EOF
     chmod +x keep_alive_task.sh
     nohup ./keep_alive_task.sh >/dev/null 2>&1 &
-    KEEPALIVE_PID=$!
-    echo -e "${GREEN}保活服务已启动（PID: $KEEPALIVE_PID）${NC}"
+    echo -e "${GREEN}保活服务已启动${NC}"
 fi
 
-# 13. 节点信息等待与保存（含Clash信息）
-echo -e "${BLUE}等待节点信息生成（最多10分钟）...${NC}"
+# 等待节点生成并验证
+echo -e "${BLUE}等待所有协议节点生成（最多10分钟）...${NC}"
 MAX_WAIT=600
 WAIT_COUNT=0
 NODE_INFO=""
 while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-    if [ -f ".cache/sub.txt" ] && [ -n "$(cat .cache/sub.txt 2>/dev/null)" ]; then
-        NODE_INFO=$(cat .cache/sub.txt)
-        break
-    elif [ -f "sub.txt" ] && [ -n "$(cat sub.txt 2>/dev/null)" ]; then
-        NODE_INFO=$(cat sub.txt)
-        break
+    if [ -f "list.txt" ] && [ -s "list.txt" ]; then
+        # 检查是否所有协议都已生成
+        if check_protocols_generated "list.txt"; then
+            NODE_INFO=$(cat sub.txt)
+            break
+        else
+            echo -e "${YELLOW}节点生成不完整，等待重试...${NC}"
+            sleep 10
+            WAIT_COUNT=$((WAIT_COUNT + 10))
+        fi
+    else
+        [ $((WAIT_COUNT % 30)) -eq 0 ] && echo -e "${YELLOW}已等待 $((WAIT_COUNT/60)) 分 $((WAIT_COUNT%60)) 秒...${NC}"
+        sleep 5
+        WAIT_COUNT=$((WAIT_COUNT + 5))
     fi
-    [ $((WAIT_COUNT % 30)) -eq 0 ] && echo -e "${YELLOW}已等待 $((WAIT_COUNT/60)) 分 $((WAIT_COUNT%60)) 秒...${NC}"
-    sleep 5
-    WAIT_COUNT=$((WAIT_COUNT + 5))
 done
 
-# 14. 部署完成输出（强化Clash信息显示）
+# 部署完成处理
 if [ -n "$NODE_INFO" ]; then
     SERVICE_PORT=$(grep "PORT = int" app.py | grep -o "or [0-9]*" | cut -d" " -f2)
     CURRENT_UUID=$(grep "UUID = " app.py | head -1 | cut -d"'" -f2)
@@ -714,62 +752,9 @@ if [ -n "$NODE_INFO" ]; then
     PUBLIC_IP=$(curl -s https://api.ipify.org 2>/dev/null || "获取失败")
     DECODED_NODES=$(echo "$NODE_INFO" | base64 -d 2>/dev/null || echo "$NODE_INFO")
 
-    # 确保Clash配置已生成（兜底检查）
-    if [ ! -f "clash_config.yaml" ]; then
-        echo -e "${YELLOW}Clash配置生成延迟，正在手动补充...${NC}"
-        UUID=$(grep "UUID = " app.py | head -1 | cut -d"'" -f2)
-        CFIP=$(grep "CFIP = " app.py | cut -d"'" -f4)
-        CFPORT=$(grep "CFPORT = " app.py | cut -d"'" -f4)
-        NAME=$(grep "NAME = " app.py | head -1 | cut -d"'" -f4)
-        ISP=$(curl -s https://speed.cloudflare.com/meta | grep -oP '"colo":"\K[^"]+' || echo "Unknown")
-        
-        cat > clash_config.yaml << EOF
-proxies:
-  - name: "${NAME}-${ISP}-VLESS"
-    type: vless
-    server: ${CFIP}
-    port: ${CFPORT}
-    uuid: ${UUID}
-    encryption: none
-    tls: true
-    servername: ${CFIP}
-    network: ws
-    ws-opts:
-      path: "/vless-argo?ed=2560"
-      host: ${CFIP}
-
-  - name: "${NAME}-${ISP}-VMESS"
-    type: vmess
-    server: ${CFIP}
-    port: ${CFPORT}
-    uuid: ${UUID}
-    alterId: 0
-    cipher: auto
-    tls: true
-    network: ws
-    ws-opts:
-      path: "/vmess-argo?ed=2560"
-      host: ${CFIP}
-
-proxy-groups:
-  - name: "自动选择"
-    type: url-test
-    proxies:
-      - "${NAME}-${ISP}-VLESS"
-      - "${NAME}-${ISP}-VMESS"
-    url: "http://www.gstatic.com/generate_204"
-    interval: 300
-
-rules:
-  - DOMAIN-SUFFIX,youtube.com,自动选择
-  - MATCH,自动选择
-EOF
-        base64 clash_config.yaml > clash_sub.txt
-    fi
-
-    # 保存节点信息（含Clash）
+    # 保存节点信息
     SAVE_INFO="========================================
-                      节点信息保存                      
+               所有协议节点信息（${PROTOCOLS[*]}）
 ========================================
 部署时间: $(date)
 UUID: $( [ -n "$MULTI_UUIDS" ] && echo "$MULTI_UUIDS" || echo "$CURRENT_UUID" )
@@ -777,44 +762,40 @@ UUID: $( [ -n "$MULTI_UUIDS" ] && echo "$MULTI_UUIDS" || echo "$CURRENT_UUID" )
 订阅路径: /$SUB_PATH_VALUE
 === 访问地址 ===
 订阅地址: http://$PUBLIC_IP:$SERVICE_PORT/$SUB_PATH_VALUE
-管理面板: http://$PUBLIC_IP:$SERVICE_PORT
-本地订阅: http://localhost:$SERVICE_PORT/$SUB_PATH_VALUE
-=== Clash 专属地址 ===
-Clash配置文件: $PROJECT_DIR_NAME/clash_config.yaml
-Clash订阅内容: $(cat clash_sub.txt 2>/dev/null || "生成中")
-=== 节点信息 ===
-$DECODED_NODES
+本地节点列表: $PROJECT_DIR_NAME/list.txt
+=== Clash 信息 ===
+配置文件: $PROJECT_DIR_NAME/clash_config.yaml
+订阅内容: $(cat clash_sub.txt 2>/dev/null || "生成中")
+=== 节点预览 ===
+$(echo "$DECODED_NODES" | head -6)
+...
 === 管理命令 ===
+查看所有节点: cat $PROJECT_DIR_NAME/list.txt
+重新生成节点: 菜单4选择"重新生成所有节点"
 查看日志: tail -f $PROJECT_DIR_NAME/app.log
-停止主服务: kill $APP_PID
-重启主服务: kill $APP_PID && nohup python3 $PROJECT_DIR_NAME/app.py > $PROJECT_DIR_NAME/app.log 2>&1 &
-$( [ -n "$KEEPALIVE_PID" ] && echo "停止保活服务: kill $KEEPALIVE_PID && rm $PROJECT_DIR_NAME/keep_alive_status.log" )
-=== 功能说明 ===
-- 支持VLESS/VMESS/Trojan协议（兼容Clash客户端）
-- 已集成YouTube分流+自定义分流（域名：$CUSTOM_DOMAINS）
-- 多节点配置：$( [ -n "$MULTI_UUIDS" ] && echo "已启用（$MULTI_UUIDS）" || echo "未启用" )
 "
     echo "$SAVE_INFO" > "$NODE_INFO_FILE"
 
     # 终端输出
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}                      部署完成！                      ${NC}"
+    echo -e "${GREEN}               部署完成！所有协议节点已生成               ${NC}"
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${YELLOW}=== 服务信息 ===${NC}"
-    echo -e "主服务PID: ${BLUE}$APP_PID${NC}"
-    [ -n "$KEEPALIVE_PID" ] && echo -e "保活服务PID: ${BLUE}$KEEPALIVE_PID${NC}"
-    echo -e "服务端口: ${BLUE}$SERVICE_PORT${NC}"
-    echo -e "${YELLOW}=== Clash 信息 ===${NC}"
-    echo -e "配置文件: ${GREEN}$PROJECT_DIR_NAME/clash_config.yaml${NC}"
-    echo -e "订阅链接: ${GREEN}$(cat clash_sub.txt 2>/dev/null)${NC}"
-    echo -e "${YELLOW}=== 节点订阅 ===${NC}"
-    echo -e "公网订阅: ${GREEN}http://$PUBLIC_IP:$SERVICE_PORT/$SUB_PATH_VALUE${NC}"
-    echo -e "节点信息已保存至: ${GREEN}$NODE_INFO_FILE${NC}"
+    echo -e "${YELLOW}=== 生成的协议节点 ===${NC}"
+    echo -e "支持: ${BLUE}${PROTOCOLS[*]}${NC}"
+    echo -e "${YELLOW}=== 节点位置 ===${NC}"
+    echo -e "明文列表: ${GREEN}$PROJECT_DIR_NAME/list.txt${NC}"
+    echo -e "订阅链接: ${GREEN}http://$PUBLIC_IP:$SERVICE_PORT/$SUB_PATH_VALUE${NC}"
+    echo -e "${YELLOW}=== 验证结果 ===${NC}"
+    check_protocols_generated "$PROJECT_DIR_NAME/list.txt" && \
+        echo -e "${GREEN}所有协议节点生成正常${NC}" || \
+        echo -e "${RED}部分协议节点缺失，请通过菜单4重新生成${NC}"
 else
-    echo -e "${RED}等待超时！节点信息未生成${NC}"
-    echo -e "${YELLOW}查看日志: tail -f $PROJECT_DIR_NAME/app.log${NC}"
+    echo -e "${RED}等待超时！节点生成失败${NC}"
+    echo -e "${YELLOW}错误排查:${NC}"
+    echo -e "1. 查看日志: tail -f $PROJECT_DIR_NAME/app.log"
+    echo -e "2. 尝试重新生成: 运行脚本选择菜单4->4"
     exit 1
 fi
 
-echo -e "${GREEN}修复版部署完成！Clash配置已确保生成！${NC}"
+echo -e "${GREEN}全协议版部署完成！${NC}"
 exit 0
