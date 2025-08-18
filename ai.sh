@@ -1,5 +1,5 @@
 #!/bin/bash
-# Python Xray Argo 一键部署脚本（语法修复版）
+# Python Xray Argo 一键部署脚本（最终修复版）
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -182,7 +182,7 @@ log_manage() {
 # 主脚本入口
 clear
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}    Python Xray Argo 一键部署脚本（语法修复版）   ${NC}"
+echo -e "${GREEN}    Python Xray Argo 一键部署脚本（最终修复版）   ${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo
 echo -e "${BLUE}支持协议：${PROTOCOLS[*]}（自动生成所有协议节点）${NC}"
@@ -336,7 +336,7 @@ else
     configure_hf_keep_alive
 fi
 
-# 生成所有协议节点和Clash配置（修复语法错误版本）
+# 生成所有协议节点和Clash配置（最终修复版）
 echo -e "${BLUE}生成所有协议节点（${PROTOCOLS[*]}）和Clash配置...${NC}"
 cat > protocol_patch.py << 'EOF'
 #!/usr/bin/env python3
@@ -415,7 +415,7 @@ def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):
         if 'trojan' in protocols:
             proxies += f'  - name: "{name}-{isp}-Trojan-TLS-{i}"\n    type: trojan\n    server: {cfip}\n    port: {cfport}\n    password: {uuid}\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/trojan-argo?ed=2560"\n      host: {argo_domain}\n\n'
     
-    # 修复语法错误：使用正确的多行字符串格式
+    # 构建代理组配置
     proxy_groups = "proxy-groups:\n"
     proxy_groups += "  - name: \"自动选择\"\n"
     proxy_groups += "    type: url-test\n"
@@ -438,6 +438,7 @@ def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):
     proxy_groups += "      - \"自动选择\"\n"
     proxy_groups += "      - \"DIRECT\"\n"
 
+    # 构建规则配置
     rules = "rules:\n"
     rules += "  - DOMAIN-SUFFIX,youtube.com,自动选择\n"
     rules += "  - DOMAIN-SUFFIX,youtu.be,自动选择\n"
@@ -452,6 +453,7 @@ def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):
     rules += "  - GEOIP,CN,DIRECT\n"
     rules += "  - MATCH,全局代理\n"
 
+    # 组合并写入配置
     clash_yaml = proxies + proxy_groups + rules
     with open('clash_config.yaml', 'w', encoding='utf-8') as f:
         f.write(clash_yaml)
@@ -567,115 +569,105 @@ def patch_app_py():
     with open('app.py', 'w', encoding='utf-8') as f:
         f.write(content)
     
-    # 保存协议生成器（使用正确的字符串格式）
+    # 保存协议生成器（确保正确的语法结构）
     with open('protocol_generator.py', 'w', encoding='utf-8') as f:
-        f.write('''import os, base64, json, subprocess, time
+        f.write('import os, base64, json, subprocess, time\n\n')
+        f.write('def generate_all_protocols(argo_domain, uuid_list, cfip, cfport, name):\n')
+        f.write('    meta_info = subprocess.run([\'curl\', \'-s\', \'https://speed.cloudflare.com/meta\'], capture_output=True, text=True)\n')
+        f.write('    meta_info = meta_info.stdout.split(\'"\') if meta_info.stdout else ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Unknown", "", "", "", "", "", "", "", "Unknown"]\n')
+        f.write('    isp = f"{meta_info[25]}-{meta_info[17]}".replace(\' \', \'_\').strip()\n\n')
+        f.write('    list_txt = ""\n')
+        f.write('    uuid_arr = uuid_list.split(\',\') if uuid_list else [uuid_list]\n')
+        f.write('    protocols = os.environ.get(\'PROTOCOLS\', \'vless,vmess,trojan\').split(\',\')\n\n')
+        f.write('    for i, uuid in enumerate(uuid_arr, 1):\n')
+        f.write('        if not uuid: continue\n\n')
+        f.write('        if \'vless\' in protocols:\n')
+        f.write('            list_txt += f"vless://{uuid}@{cfip}:{cfport}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-TLS-{i}\\n\\n"\n')
+        f.write('            list_txt += f"vless://{uuid}@{cfip}:80?encryption=none&security=none&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-80-{i}\\n\\n"\n\n')
+        f.write('        if \'vmess\' in protocols:\n')
+        f.write('            vmess_tls = {\n')
+        f.write('                "v": "2", "ps": f"{name}-{isp}-VMESS-TLS-{i}",\n')
+        f.write('                "add": cfip, "port": cfport, "id": uuid,\n')
+        f.write('                "aid": "0", "scy": "none", "net": "ws",\n')
+        f.write('                "type": "none", "host": argo_domain,\n')
+        f.write('                "path": "/vmess-argo?ed=2560", "tls": "tls",\n')
+        f.write('                "sni": argo_domain, "alpn": "", "fp": "chrome"\n')
+        f.write('            }\n')
+        f.write('            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_tls).encode(\'utf-8\')).decode(\'utf-8\')}\\n\\n"\n\n')
+        f.write('            vmess_80 = {\n')
+        f.write('                "v": "2", "ps": f"{name}-{isp}-VMESS-80-{i}",\n')
+        f.write('                "add": cfip, "port": "80", "id": uuid,\n')
+        f.write('                "aid": "0", "scy": "none", "net": "ws",\n')
+        f.write('                "type": "none", "host": argo_domain,\n')
+        f.write('                "path": "/vmess-argo?ed=2560", "tls": ""\n')
+        f.write('            }\n')
+        f.write('            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_80).encode(\'utf-8\')).decode(\'utf-8\')}\\n\\n"\n\n')
+        f.write('        if \'trojan\' in protocols:\n')
+        f.write('            list_txt += f"trojan://{uuid}@{cfip}:{cfport}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-TLS-{i}\\n\\n"\n')
+        f.write('            list_txt += f"trojan://{uuid}@{cfip}:80?security=none&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-80-{i}\\n\\n"\n\n')
+        f.write('    return list_txt, isp\n\n')
 
-def generate_all_protocols(argo_domain, uuid_list, cfip, cfport, name):
-    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
-    meta_info = meta_info.stdout.split('"') if meta_info.stdout else ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Unknown", "", "", "", "", "", "", "", "Unknown"]
-    isp = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-    
-    list_txt = ""
-    uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
-    protocols = os.environ.get('PROTOCOLS', 'vless,vmess,trojan').split(',')
-    
-    for i, uuid in enumerate(uuid_arr, 1):
-        if not uuid: continue
-        
-        if 'vless' in protocols:
-            list_txt += f"vless://{uuid}@{cfip}:{cfport}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-TLS-{i}\\n\\n"
-            list_txt += f"vless://{uuid}@{cfip}:80?encryption=none&security=none&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{name}-{isp}-VLESS-80-{i}\\n\\n"
-        
-        if 'vmess' in protocols:
-            vmess_tls = {
-                "v": "2", "ps": f"{name}-{isp}-VMESS-TLS-{i}",
-                "add": cfip, "port": cfport, "id": uuid,
-                "aid": "0", "scy": "none", "net": "ws",
-                "type": "none", "host": argo_domain,
-                "path": "/vmess-argo?ed=2560", "tls": "tls",
-                "sni": argo_domain, "alpn": "", "fp": "chrome"
-            }
-            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_tls).encode('utf-8')).decode('utf-8')}\\n\\n"
-            
-            vmess_80 = {
-                "v": "2", "ps": f"{name}-{isp}-VMESS-80-{i}",
-                "add": cfip, "port": "80", "id": uuid,
-                "aid": "0", "scy": "none", "net": "ws",
-                "type": "none", "host": argo_domain,
-                "path": "/vmess-argo?ed=2560", "tls": ""
-            }
-            list_txt += f"vmess://{base64.b64encode(json.dumps(vmess_80).encode('utf-8')).decode('utf-8')}\\n\\n"
-        
-        if 'trojan' in protocols:
-            list_txt += f"trojan://{uuid}@{cfip}:{cfport}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-TLS-{i}\\n\\n"
-            list_txt += f"trojan://{uuid}@{cfip}:80?security=none&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{name}-{isp}-Trojan-80-{i}\\n\\n"
-    
-    return list_txt, isp
+        f.write('def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):\n')
+        f.write('    proxies = "proxies:\\n"\n')
+        f.write('    uuid_arr = uuid_list.split(\',\') if uuid_list else [uuid_list]\n')
+        f.write('    protocols = os.environ.get(\'PROTOCOLS\', \'vless,vmess,trojan\').split(\',\')\n\n')
+        f.write('    for i, uuid in enumerate(uuid_arr, 1):\n')
+        f.write('        if not uuid: continue\n\n')
+        f.write('        if \'vless\' in protocols:\n')
+        f.write('            proxies += f\'  - name: "{name}-{isp}-VLESS-TLS-{i}"\\n    type: vless\\n    server: {cfip}\\n    port: {cfport}\\n    uuid: {uuid}\\n    encryption: none\\n    tls: true\\n    servername: {argo_domain}\\n    fp: chrome\\n    network: ws\\n    ws-opts:\\n      path: "/vless-argo?ed=2560"\\n      host: {argo_domain}\\n\\n\'\n\n')
+        f.write('        if \'vmess\' in protocols:\n')
+        f.write('            proxies += f\'  - name: "{name}-{isp}-VMESS-TLS-{i}"\\n    type: vmess\\n    server: {cfip}\\n    port: {cfport}\\n    uuid: {uuid}\\n    alterId: 0\\n    cipher: auto\\n    tls: true\\n    network: ws\\n    ws-opts:\\n      path: "/vmess-argo?ed=2560"\\n      host: {argo_domain}\\n\\n\'\n\n')
+        f.write('        if \'trojan\' in protocols:\n')
+        f.write('            proxies += f\'  - name: "{name}-{isp}-Trojan-TLS-{i}"\\n    type: trojan\\n    server: {cfip}\\n    port: {cfport}\\n    password: {uuid}\\n    tls: true\\n    servername: {argo_domain}\\n    fp: chrome\\n    network: ws\\n    ws-opts:\\n      path: "/trojan-argo?ed=2560"\\n      host: {argo_domain}\\n\\n\'\n\n')
 
-def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name, isp):
-    proxies = "proxies:\\n"
-    uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
-    protocols = os.environ.get('PROTOCOLS', 'vless,vmess,trojan').split(',')
-    
-    for i, uuid in enumerate(uuid_arr, 1):
-        if not uuid: continue
-        
-        if 'vless' in protocols:
-            proxies += f'  - name: "{name}-{isp}-VLESS-TLS-{i}"\\n    type: vless\\n    server: {cfip}\\n    port: {cfport}\\n    uuid: {uuid}\\n    encryption: none\\n    tls: true\\n    servername: {argo_domain}\\n    fp: chrome\\n    network: ws\\n    ws-opts:\\n      path: "/vless-argo?ed=2560"\\n      host: {argo_domain}\\n\\n'
-        
-        if 'vmess' in protocols:
-            proxies += f'  - name: "{name}-{isp}-VMESS-TLS-{i}"\\n    type: vmess\\n    server: {cfip}\\n    port: {cfport}\\n    uuid: {uuid}\\n    alterId: 0\\n    cipher: auto\\n    tls: true\\n    network: ws\\n    ws-opts:\\n      path: "/vmess-argo?ed=2560"\\n      host: {argo_domain}\\n\\n'
-        
-        if 'trojan' in protocols:
-            proxies += f'  - name: "{name}-{isp}-Trojan-TLS-{i}"\\n    type: trojan\\n    server: {cfip}\\n    port: {cfport}\\n    password: {uuid}\\n    tls: true\\n    servername: {argo_domain}\\n    fp: chrome\\n    network: ws\\n    ws-opts:\\n      path: "/trojan-argo?ed=2560"\\n      host: {argo_domain}\\n\\n'
-    
-    # 修复语法错误：使用字符串拼接而非三重引号
-    proxy_groups = "proxy-groups:\\n"
-    proxy_groups += "  - name: \"自动选择\"\\n"
-    proxy_groups += "    type: url-test\\n"
-    proxy_groups += "    proxies:\\n"
-    
-    for i, uuid in enumerate(uuid_arr, 1):
-        if not uuid: continue
-        if 'vless' in protocols:
-            proxy_groups += f'      - "{name}-{isp}-VLESS-TLS-{i}"\\n'
-        if 'vmess' in protocols:
-            proxy_groups += f'      - "{name}-{isp}-VMESS-TLS-{i}"\\n'
-        if 'trojan' in protocols:
-            proxy_groups += f'      - "{name}-{isp}-Trojan-TLS-{i}"\\n'
-    
-    proxy_groups += "    url: \"http://www.gstatic.com/generate_204\"\\n"
-    proxy_groups += "    interval: 300\\n"
-    proxy_groups += "  - name: \"全局代理\"\\n"
-    proxy_groups += "    type: select\\n"
-    proxy_groups += "    proxies:\\n"
-    proxy_groups += "      - \"自动选择\"\\n"
-    proxy_groups += "      - \"DIRECT\"\\n"
+        f.write('    # 构建代理组配置\n')
+        f.write('    proxy_groups = "proxy-groups:\\n"\n')
+        f.write('    proxy_groups += "  - name: \\"自动选择\\"\\n"\n')
+        f.write('    proxy_groups += "    type: url-test\\n"\n')
+        f.write('    proxy_groups += "    proxies:\\n"\n\n')
+        f.write('    for i, uuid in enumerate(uuid_arr, 1):\n')
+        f.write('        if not uuid: continue\n')
+        f.write('        if \'vless\' in protocols:\n')
+        f.write('            proxy_groups += f\'      - "{name}-{isp}-VLESS-TLS-{i}"\\n\'\n')
+        f.write('        if \'vmess\' in protocols:\n')
+        f.write('            proxy_groups += f\'      - "{name}-{isp}-VMESS-TLS-{i}"\\n\'\n')
+        f.write('        if \'trojan\' in protocols:\n')
+        f.write('            proxy_groups += f\'      - "{name}-{isp}-Trojan-TLS-{i}"\\n\'\n\n')
+        f.write('    proxy_groups += "    url: \\"http://www.gstatic.com/generate_204\\"\\n"\n')
+        f.write('    proxy_groups += "    interval: 300\\n"\n')
+        f.write('    proxy_groups += "  - name: \\"全局代理\\"\\n"\n')
+        f.write('    proxy_groups += "    type: select\\n"\n')
+        f.write('    proxy_groups += "    proxies:\\n"\n')
+        f.write('    proxy_groups += "      - \\"自动选择\\"\\n"\n')
+        f.write('    proxy_groups += "      - \\"DIRECT\\"\\n"\n\n')
 
-    rules = "rules:\\n"
-    rules += "  - DOMAIN-SUFFIX,youtube.com,自动选择\\n"
-    rules += "  - DOMAIN-SUFFIX,youtu.be,自动选择\\n"
-    rules += "  - DOMAIN-SUFFIX,googlevideo.com,自动选择\\n"
-    
-    custom_domains = os.environ.get('CUSTOM_DOMAINS', '')
-    if custom_domains:
-        for domain in custom_domains.split(','):
-            rules += f'  - DOMAIN-SUFFIX,{domain.strip()},自动选择\\n'
-    
-    rules += "  - DOMAIN-SUFFIX,baidu.com,DIRECT\\n"
-    rules += "  - DOMAIN-SUFFIX,qq.com,DIRECT\\n"
-    rules += "  - GEOIP,CN,DIRECT\\n"
-    rules += "  - MATCH,全局代理\\n"
+        f.write('    # 构建规则配置\n')
+        f.write('    rules = "rules:\\n"\n')
+        f.write('    rules += "  - DOMAIN-SUFFIX,youtube.com,自动选择\\n"\n')
+        f.write('    rules += "  - DOMAIN-SUFFIX,youtu.be,自动选择\\n"\n')
+        f.write('    rules += "  - DOMAIN-SUFFIX,googlevideo.com,自动选择\\n"\n\n')
+        f.write('    custom_domains = os.environ.get(\'CUSTOM_DOMAINS\', \'\')\n')
+        f.write('    if custom_domains:\n')
+        f.write('        for domain in custom_domains.split(\',\'):\n')
+        f.write('            rules += f\'  - DOMAIN-SUFFIX,{domain.strip()},自动选择\\n\'\n\n')
+        f.write('    rules += "  - DOMAIN-SUFFIX,baidu.com,DIRECT\\n"\n')
+        f.write('    rules += "  - DOMAIN-SUFFIX,qq.com,DIRECT\\n"\n')
+        f.write('    rules += "  - GEOIP,CN,DIRECT\\n"\n')
+        f.write('    rules += "  - MATCH,全局代理\\n"\n\n')
 
-    clash_yaml = proxies + proxy_groups + rules
-    with open('clash_config.yaml', 'w', encoding='utf-8') as f:
-        f.write(clash_yaml)
-    with open('clash_sub.txt', 'w', encoding='utf-8') as f:
-        f.write(base64.b64encode(clash_yaml.encode('utf-8')).decode('utf-8'))'''
+        f.write('    # 组合并写入配置\n')
+        f.write('    clash_yaml = proxies + proxy_groups + rules\n')
+        f.write('    with open(\'clash_config.yaml\', \'w\', encoding=\'utf-8\') as f:\n')
+        f.write('        f.write(clash_yaml)\n')
+        f.write('    with open(\'clash_sub.txt\', \'w\', encoding=\'utf-8\') as f:\n')
+        f.write('        f.write(base64.b64encode(clash_yaml.encode(\'utf-8\')).decode(\'utf-8\'))\n')
+
+# 确保主函数调用正确缩进
+def main():
+    patch_app_py()
 
 if __name__ == "__main__":
-    patch_app_py()
+    main()
 EOF
 
 # 传递环境变量并执行补丁（确保所有协议被包含）
@@ -796,6 +788,5 @@ else
     exit 1
 fi
 
-echo -e "${GREEN}语法修复版部署完成！${NC}"
+echo -e "${GREEN}最终修复版部署完成！${NC}"
 exit 0
-
