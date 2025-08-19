@@ -1,22 +1,36 @@
-
 #!/bin/bash
-# 优化版 Python Xray Argo 一键部署脚本
-# 功能：全球代理(国内直连+国际代理) + 速度优化 + 自动优选IP
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 基础配置
 NODE_INFO_FILE="$HOME/.xray_nodes_info"
 PROJECT_DIR_NAME="python-xray-argo"
-CUSTOM_DOMAINS=""
-MULTI_UUIDS=""
-PROTOCOLS=("vless" "vmess" "trojan")
-BEST_CFIP=""
 
-# 1. 生成UUID
+# 新增：快速切换代理模式的参数
+if [ "$1" = "-f" ]; then
+    echo -e "${YELLOW}已启用快速模式，优化网络连接速度${NC}"
+    FAST_MODE=true
+fi
+
+# 如果是-v参数，直接查看节点信息
+if [ "$1" = "-v" ]; then
+    if [ -f "$NODE_INFO_FILE" ]; then
+        echo -e "${GREEN}========================================${NC}"
+        echo -e "${GREEN}                      节点信息查看                      ${NC}"
+        echo -e "${GREEN}========================================${NC}"
+        echo
+        cat "$NODE_INFO_FILE"
+        echo
+    else
+        echo -e "${RED}未找到节点信息文件${NC}"
+        echo -e "${YELLOW}请先运行部署脚本生成节点信息${NC}"
+    fi
+    exit 0
+fi
+
 generate_uuid() {
     if command -v uuidgen &> /dev/null; then
         uuidgen | tr '[:upper:]' '[:lower:]'
@@ -27,746 +41,468 @@ generate_uuid() {
     fi
 }
 
-# 2. 检查服务PID
-get_service_pid() {
-    local service_key=$1
-    pgrep -f "$service_key" | head -1
-}
-
-# 3. 检查协议完整性
-check_protocols() {
-    local list_file="$1"
-    local missing=()
-    for proto in "${PROTOCOLS[@]}"; do
-        if ! grep -qi "$proto://" "$list_file" 2>/dev/null; then
-            missing+=("$proto")
-        fi
-    done
-    if [ ${#missing[@]} -eq 0 ]; then
-        return 0
-    else
-        echo "缺失协议: ${missing[*]}"
-        return 1
-    fi
-}
-
-# 4. Clash配置管理
-clash_manage() {
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}               Clash 配置管理               ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${BLUE}1) 查看配置${NC}"
-    echo -e "${BLUE}2) 导出配置${NC}"
-    echo -e "${BLUE}3) 复制订阅链接${NC}"
-    read -p "选择: " CLASH_CHOICE
-
-    if [ ! -d "$PROJECT_DIR_NAME" ]; then
-        echo -e "${RED}未找到项目目录，请先部署${NC}"
-        exit 1
-    fi
-    cd "$PROJECT_DIR_NAME"
-
-    case $CLASH_CHOICE in
-        1) [ -f "clash_config.yaml" ] && cat "clash_config.yaml" || echo -e "${RED}配置未生成${NC}" ;;
-        2) 
-            if [ -f "clash_config.yaml" ]; then
-                local dest="$HOME/clash_$(date +%Y%m%d).yaml"
-                cp "clash_config.yaml" "$dest"
-                echo -e "${GREEN}已导出至: $dest${NC}"
-            else
-                echo -e "${RED}配置未生成${NC}"
-            fi
-            ;;
-        3)
-            if [ -f "clash_sub.txt" ]; then
-                local sub=$(cat "clash_sub.txt")
-                echo -e "${GREEN}订阅链接:${NC}\n$sub"
-                echo "$sub" | xclip -selection clipboard 2>/dev/null && echo -e "${YELLOW}已复制到剪贴板${NC}"
-            else
-                echo -e "${RED}订阅未生成${NC}"
-            fi
-            ;;
-    esac
-    exit 0
-}
-
-# 5. 服务管理
-service_manage() {
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}               服务管理               ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${BLUE}1) 启动服务${NC}"
-    echo -e "${BLUE}2) 停止服务${NC}"
-    echo -e "${BLUE}3) 重启服务${NC}"
-    echo -e "${BLUE}4) 重新生成节点${NC}"
-    read -p "选择: " SERVICE_CHOICE
-
-    local app_pid=$(get_service_pid "python3 app.py")
-
-    case $SERVICE_CHOICE in
-        1)
-            if [ -z "$app_pid" ]; then
-                [ -d "$PROJECT_DIR_NAME" ] && cd "$PROJECT_DIR_NAME"
-                nohup python3 app.py > app.log 2>&1 &
-                echo -e "${GREEN}服务已启动（PID: $(get_service_pid "python3 app.py")）${NC}"
-            else
-                echo -e "${YELLOW}服务已运行（PID: $app_pid）${NC}"
-            fi
-            ;;
-        2)
-            if [ -n "$app_pid" ]; then
-                kill "$app_pid" && echo -e "${GREEN}服务已停止${NC}"
-            else
-                echo -e "${RED}服务未运行${NC}"
-            fi
-            ;;
-        3)
-            [ -n "$app_pid" ] && kill "$app_pid" && sleep 2
-            [ -d "$PROJECT_DIR_NAME" ] && cd "$PROJECT_DIR_NAME"
-            nohup python3 app.py > app.log 2>&1 &
-            echo -e "${GREEN}服务已重启（PID: $(get_service_pid "python3 app.py")）${NC}"
-            ;;
-        4)
-            echo -e "${BLUE}重新生成节点...${NC}"
-            [ -n "$app_pid" ] && kill "$app_pid" && sleep 2
-            [ -d "$PROJECT_DIR_NAME" ] && cd "$PROJECT_DIR_NAME"
-            rm -f list.txt sub.txt clash_config.yaml clash_sub.txt
-            nohup python3 app.py > app.log 2>&1 &
-            echo -e "${GREEN}节点生成中（PID: $(get_service_pid "python3 app.py")）${NC}"
-            ;;
-    esac
-    exit 0
-}
-
-# 6. 日志操作
-log_manage() {
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}               日志操作               ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${BLUE}1) 查看服务日志${NC}"
-    echo -e "${BLUE}2) 查看节点生成日志${NC}"
-    echo -e "${BLUE}3) 清理日志${NC}"
-    read -p "选择: " LOG_CHOICE
-
-    if [ ! -d "$PROJECT_DIR_NAME" ]; then
-        echo -e "${RED}未找到项目目录${NC}"
-        exit 1
-    fi
-    local log_dir="$PROJECT_DIR_NAME"
-
-    case $LOG_CHOICE in
-        1) tail -f "$log_dir/app.log" ;;
-        2) grep -E "generate_links|clash|node" "$log_dir/app.log" ;;
-        3) rm -f "$log_dir/app.log" && echo -e "${GREEN}日志已清理${NC}" ;;
-    esac
-    exit 0
-}
-
-# 7. 筛选最优Cloudflare IP
-select_best_cfip() {
-    echo -e "${BLUE}开始筛选最优Cloudflare IP（提升连接速度）...${NC}"
-    
-    # 安装必要工具
-    if ! command -v wget &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y wget
-    fi
-    
-    # 下载Cloudflare IP测速工具
-    if [ ! -f "CloudflareSpeedTest" ]; then
-        echo -e "${YELLOW}正在下载IP测速工具...${NC}"
-        wget -q https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareSpeedTest_linux_amd64.tar.gz -O cfst.tar.gz
-        tar -zxf cfst.tar.gz CloudflareSpeedTest
-        chmod +x CloudflareSpeedTest
-        rm -f cfst.tar.gz
-    fi
-    
-    # 测试并选择最优IP（延迟低、速度快）
-    echo -e "${BLUE}正在测试IP质量（约30秒）...${NC}"
-    BEST_CFIP=$(./CloudflareSpeedTest -t 10 -n 50 -p 443 | grep -oE "([0-9]+\.){3}[0-9]+" | head -1)
-    
-    #  fallback方案
-    if [ -z "$BEST_CFIP" ]; then
-        echo -e "${YELLOW}IP测试失败，使用备用IP${NC}"
-        BEST_CFIP="104.18.18.18"  # 备用Cloudflare IP
-    else
-        echo -e "${GREEN}已选择最优IP: $BEST_CFIP${NC}"
-    fi
-}
-
-# 8. 主入口
 clear
+
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}    Python Xray Argo 一键部署脚本（优化版）   ${NC}"
+echo -e "${GREEN}    Python Xray Argo 一键部署脚本   ${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo -e "${BLUE}功能：全球代理(国内直连+国际代理) + 速度优化${NC}"
-echo -e "${BLUE}支持协议：${PROTOCOLS[*]}${NC}"
+echo
+echo -e "${BLUE}基于项目: ${YELLOW}https://github.com/eooce/python-xray-argo${NC}"
+echo -e "${BLUE}脚本仓库: ${YELLOW}https://github.com/byJoey/free-vps-py${NC}"
+echo -e "${BLUE}TG交流群: ${YELLOW}https://t.me/+ft-zI76oovgwNmRh${NC}"
+echo -e "${RED}脚本作者YouTube: ${YELLOW}https://www.youtube.com/@joeyblog${RED}"
+echo
+echo -e "${GREEN}本脚本基于 eooce 大佬的 Python Xray Argo 项目开发${NC}"
+echo -e "${GREEN}提供极速和完整两种配置模式，简化部署流程${NC}"
+echo -e "${GREEN}支持自动UUID生成、后台运行、节点信息输出${NC}"
+echo -e "${GREEN}默认集成智能分流优化，支持全球网络代理${NC}"
 echo
 
-# 主菜单
 echo -e "${YELLOW}请选择操作:${NC}"
-echo -e "${BLUE}1) 极速部署${NC}"
-echo -e "${BLUE}2) 完整配置（推荐）${NC}"
-echo -e "${BLUE}3) Clash管理${NC}"
-echo -e "${BLUE}4) 服务管理${NC}"
-echo -e "${BLUE}5) 日志操作${NC}"
-echo -e "${BLUE}6) 查看节点信息${NC}"
-read -p "选择 (1-6): " MODE_CHOICE
+echo -e "${BLUE}1) 极速模式 - 只修改UUID并启动${NC}"
+echo -e "${BLUE}2) 完整模式 - 详细配置所有选项${NC}"
+echo -e "${BLUE}3) 查看节点信息 - 显示已保存的节点信息${NC}"
+echo -e "${BLUE}4) 查看保活状态 - 检查Hugging Face API保活状态${NC}"
+echo -e "${BLUE}5) 切换代理模式 - 全球代理/智能分流${NC}"  # 新增模式切换选项
+echo
+read -p "请输入选择 (1/2/3/4/5): " MODE_CHOICE
 
-# 菜单处理
-case $MODE_CHOICE in
-    3) clash_manage ;;
-    4) service_manage ;;
-    5) log_manage ;;
-    6)
-        if [ -f "$NODE_INFO_FILE" ]; then
-            echo -e "${GREEN}========================================${NC}"
-            echo -e "${GREEN}               节点信息               ${NC}"
-            echo -e "${GREEN}========================================${NC}"
-            cat "$NODE_INFO_FILE"
-            echo -e "\n${YELLOW}协议检查:${NC}"
-            check_protocols "$PROJECT_DIR_NAME/list.txt" || \
-                echo -e "${RED}部分协议缺失，建议通过菜单4重新生成${NC}"
+# 新增：代理模式切换逻辑
+if [ "$MODE_CHOICE" = "5" ]; then
+    if [ -d "$PROJECT_DIR_NAME" ]; then
+        cd "$PROJECT_DIR_NAME" || exit
+        if grep -q "geosite:cn" app.py; then
+            # 切换到全球代理模式
+            sed -i "s/geosite:cn/geosite:category-ads/" app.py
+            echo -e "${GREEN}已切换为全球代理模式（所有流量均通过代理）${NC}"
         else
-            echo -e "${RED}未找到节点信息${NC}"
-            read -p "是否部署? (y/n): " start_deploy
-            [ "$start_deploy" = "y" ] && read -p "模式 (1/2): " MODE_CHOICE || exit 0
+            # 切换到智能分流模式
+            sed -i "s/geosite:category-ads/geosite:cn/" app.py
+            echo -e "${GREEN}已切换为智能分流模式（国内网站直连，境外网站代理）${NC}"
         fi
-        ;;
-esac
-
-# 部署模式校验
-if [ "$MODE_CHOICE" != "1" ] && [ "$MODE_CHOICE" != "2" ]; then
-    echo -e "${GREEN}退出${NC}"
+        echo -e "${YELLOW}请重启服务使配置生效${NC}"
+    else
+        echo -e "${RED}未找到项目目录，请先部署服务${NC}"
+    fi
     exit 0
 fi
 
-# 9. 依赖安装
-echo -e "${BLUE}安装依赖...${NC}"
+if [ "$MODE_CHOICE" = "3" ]; then
+    if [ -f "$NODE_INFO_FILE" ]; then
+        echo
+        echo -e "${GREEN}========================================${NC}"
+        echo -e "${GREEN}                      节点信息查看                      ${NC}"
+        echo -e "${GREEN}========================================${NC}"
+        echo
+        cat "$NODE_INFO_FILE"
+        echo
+        echo -e "${YELLOW}提示: 如需重新部署，请重新运行脚本选择模式1或2${NC}"
+    else
+        echo
+        echo -e "${RED}未找到节点信息文件${NC}"
+        echo -e "${YELLOW}请先运行部署脚本生成节点信息${NC}"
+        echo
+        echo -e "${BLUE}是否现在开始部署? (y/n)${NC}"
+        read -p "> " START_DEPLOY
+        if [ "$START_DEPLOY" = "y" ] || [ "$START_DEPLOY" = "Y" ]; then
+            echo -e "${YELLOW}请选择部署模式:${NC}"
+            echo -e "${BLUE}1) 极速模式${NC}"
+            echo -e "${BLUE}2) 完整模式${NC}"
+            read -p "请输入选择 (1/2): " MODE_CHOICE
+        else
+            echo -e "${GREEN}退出脚本${NC}"
+            exit 0
+        fi
+    fi
+    
+    if [ "$MODE_CHOICE" != "1" ] && [ "$MODE_CHOICE" != "2" ]; then
+        echo -e "${GREEN}退出脚本${NC}"
+        exit 0
+    fi
+fi
+
+if [ "$MODE_CHOICE" = "4" ]; then
+    echo
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}               Hugging Face API 保活状态检查              ${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo
+    
+    if [ -d "$PROJECT_DIR_NAME" ]; then
+        cd "$PROJECT_DIR_NAME"
+    fi
+
+    KEEPALIVE_PID=$(pgrep -f "keep_alive_task.sh")
+
+    if [ -n "$KEEPALIVE_PID" ]; then
+        echo -e "服务状态: ${GREEN}运行中${NC}"
+        echo -e "进程PID: ${BLUE}$KEEPALIVE_PID${NC}"
+        if [ -f "keep_alive_task.sh" ]; then
+            # 更新为从 spaces API 地址中解析
+            REPO_ID=$(grep 'huggingface.co/api/spaces/' keep_alive_task.sh | head -1 | sed -n 's|.*api/spaces/\([^"]*\).*|\1|p')
+            echo -e "目标仓库: ${YELLOW}$REPO_ID (类型: Space)${NC}"
+        fi
+
+        echo -e "\n${YELLOW}--- 最近一次保活状态 ---${NC}"
+        if [ -f "keep_alive_status.log" ]; then
+           cat keep_alive_status.log
+        else
+           echo -e "${YELLOW}尚未生成状态日志，请稍等片刻(最多2分钟)后重试...${NC}"
+        fi
+    else
+        echo -e "服务状态: ${RED}未运行${NC}"
+        echo -e "${YELLOW}提示: 您可能尚未部署服务或未在部署时设置Hugging Face保活。${NC}"
+    fi
+    echo
+    exit 0
+fi
+
+
+echo -e "${BLUE}检查并安装依赖...${NC}"
 if ! command -v python3 &> /dev/null; then
+    echo -e "${YELLOW}正在安装 Python3...${NC}"
     sudo apt-get update && sudo apt-get install -y python3 python3-pip
 fi
+
 if ! python3 -c "import requests" &> /dev/null; then
+    echo -e "${YELLOW}正在安装 Python 依赖: requests...${NC}"
     pip3 install requests
 fi
+
+# 新增：安装网络优化工具
+echo -e "${BLUE}安装网络优化工具...${NC}"
+sudo apt-get install -y curl wget unzip speedtest-cli
+
 if [ ! -d "$PROJECT_DIR_NAME" ]; then
+    echo -e "${BLUE}下载完整仓库...${NC}"
     if command -v git &> /dev/null; then
         git clone https://github.com/eooce/python-xray-argo.git "$PROJECT_DIR_NAME"
     else
-        sudo apt-get install -y unzip wget
-        wget -q https://github.com/eooce/python-xray-argo/archive/refs/heads/main.zip -O tmp.zip
-        unzip -q tmp.zip && mv python-xray-argo-main "$PROJECT_DIR_NAME" && rm tmp.zip
-    fi
-    [ $? -ne 0 ] && echo -e "${RED}下载失败，请检查网络${NC}" && exit 1
-fi
-cd "$PROJECT_DIR_NAME"
-[ ! -f "app.py" ] && echo -e "${RED}缺少app.py${NC}" && exit 1
-cp app.py app.py.backup_"$(date +%Y%m%d)"  # 备份配置
-echo -e "${GREEN}依赖安装完成${NC}"
-
-# 10. 筛选最优IP
-select_best_cfip
-
-# 11. 保活配置
-KEEP_ALIVE_HF="false"
-HF_TOKEN=""
-HF_REPO_ID=""
-configure_hf_keep_alive() {
-    read -p "启用Hugging Face保活? (y/n): " setup_ka
-    if [ "$setup_ka" = "y" ]; then
-        read -sp "输入Token: " hf_token
-        echo
-        [ -z "$hf_token" ] && echo -e "${RED}Token不能为空${NC}" && return
-        read -p "输入仓库ID: " hf_repo
-        [ -z "$hf_repo" ] && echo -e "${RED}仓库ID不能为空${NC}" && return
-        HF_TOKEN="$hf_token"
-        HF_REPO_ID="$hf_repo"
-        KEEP_ALIVE_HF="true"
-    fi
-}
-
-# 12. 部署配置
-echo -e "${BLUE}=== $( [ "$MODE_CHOICE" = "1" ] && echo "极速模式" || echo "完整模式" ) ===${NC}"
-
-# 12.1 UUID配置
-current_uuid=$(grep "UUID = " app.py | head -1 | cut -d"'" -f2)
-echo -e "${YELLOW}当前UUID: $current_uuid${NC}"
-if [ "$MODE_CHOICE" = "2" ]; then
-    read -p "启用多节点? (y/n): " multi_node
-    if [ "$multi_node" = "y" ]; then
-        read -p "输入UUID（逗号分隔，留空自动生成3个）: " multi_uuids
-        if [ -z "$multi_uuids" ]; then
-            multi_uuids="$(generate_uuid),$(generate_uuid),$(generate_uuid)"
-            echo -e "${GREEN}自动生成UUID: $multi_uuids${NC}"
+        echo -e "${YELLOW}Git未安装，使用wget下载...${NC}"
+        wget -q https://github.com/eooce/python-xray-argo/archive/refs/heads/main.zip -O python-xray-argo.zip
+        if command -v unzip &> /dev/null; then
+            unzip -q python-xray-argo.zip
+            mv python-xray-argo-main "$PROJECT_DIR_NAME"
+            rm python-xray-argo.zip
+        else
+            echo -e "${YELLOW}正在安装 unzip...${NC}"
+            sudo apt-get install -y unzip
+            unzip -q python-xray-argo.zip
+            mv python-xray-argo-main "$PROJECT_DIR_NAME"
+            rm python-xray-argo.zip
         fi
-        MULTI_UUIDS="$multi_uuids"
-    else
-        read -p "输入新UUID（留空自动生成）: " uuid_input
-        [ -z "$uuid_input" ] && uuid_input=$(generate_uuid)
-        sed -i "s/UUID = os.environ.get('UUID', '[^']*')/UUID = os.environ.get('UUID', '$uuid_input')/" app.py
-        echo -e "${GREEN}UUID已设置: $uuid_input${NC}"
     fi
-else
-    # 极速模式：单UUID
-    read -p "输入新UUID（留空自动生成）: " uuid_input
-    [ -z "$uuid_input" ] && uuid_input=$(generate_uuid)
-    sed -i "s/UUID = os.environ.get('UUID', '[^']*')/UUID = os.environ.get('UUID', '$uuid_input')/" app.py
-    echo -e "${GREEN}UUID已设置: $uuid_input${NC}"
+    
+    if [ $? -ne 0 ] || [ ! -d "$PROJECT_DIR_NAME" ]; then
+        echo -e "${RED}下载失败，请检查网络连接${NC}"
+        exit 1
+    fi
 fi
 
-# 12.2 完整模式配置
-if [ "$MODE_CHOICE" = "2" ]; then
-    current_name=$(grep "NAME = " app.py | head -1 | cut -d"'" -f4)
-    read -p "节点名称（当前: $current_name）: " name_input
-    [ -n "$name_input" ] && sed -i "s/NAME = os.environ.get('NAME', '[^']*')/NAME = os.environ.get('NAME', '$name_input')/" app.py
+cd "$PROJECT_DIR_NAME"
 
-    current_port=$(grep "PORT = int" app.py | grep -o "or [0-9]*" | cut -d" " -f2)
-    read -p "服务端口（当前: $current_port）: " port_input
-    [ -n "$port_input" ] && sed -i "s/PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or [0-9]*)/PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or $port_input)/" app.py
+echo -e "${GREEN}依赖安装完成！${NC}"
+echo
 
-    # 使用自动选择的最优IP
-    echo -e "${YELLOW}使用自动选择的最优IP: $BEST_CFIP${NC}"
-    sed -i "s/CFIP = os.environ.get('CFIP', '[^']*')/CFIP = os.environ.get('CFIP', '$BEST_CFIP')/" app.py
-
-    # 自定义分流（可选）
-    read -p "添加自定义分流域名? (y/n): " custom_rules
-    if [ "$custom_rules" = "y" ]; then
-        read -p "域名（逗号分隔）: " domains_input
-        [ -n "$domains_input" ] && CUSTOM_DOMAINS="$domains_input"
-    fi
-
-    # 高级选项
-    read -p "配置高级选项? (y/n): " advanced
-    [ "$advanced" = "y" ] && configure_hf_keep_alive
-else
-    # 极速模式默认配置
-    echo -e "${YELLOW}使用自动选择的最优IP: $BEST_CFIP${NC}"
-    sed -i "s/CFIP = os.environ.get('CFIP', '[^']*')/CFIP = os.environ.get('CFIP', '$BEST_CFIP')/" app.py
-    configure_hf_keep_alive
-fi
-
-# 13. 生成节点和Clash配置（全局代理+速度优化）
-echo -e "${BLUE}生成节点和Clash配置...${NC}"
-cat > protocol_patch.py << 'EOF'
-#!/usr/bin/env python3
-import os, base64, json, subprocess, time
-
-# 全局变量
-multi_uuids = os.environ.get('MULTI_UUIDS', '')
-custom_domains = os.environ.get('CUSTOM_DOMAINS', '')
-
-# 生成Clash配置（国内直连+国际全代理）
-def generate_clash_config(argo_domain, uuid_list, cfip, cfport, name):
-    # 获取ISP信息
-    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
-    meta_info = meta_info.stdout.split('"') if meta_info.stdout else ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Unknown", "", "", "", "", "", "", "", "Unknown"]
-    isp = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-
-    # 多节点配置
-    proxies = "proxies:\n"
-    uuid_arr = uuid_list.split(',') if uuid_list else [uuid_list]
-    for i, uuid in enumerate(uuid_arr, 1):
-        if not uuid: continue
-        # VLESS-TLS (优化版)
-        proxies += f'  - name: "{name}-{isp}-VLESS-TLS-{i}"\n    type: vless\n    server: {cfip}\n    port: {cfport}\n    uuid: {uuid}\n    encryption: none\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/vless-argo?ed=2560"\n      host: {argo_domain}\n    alpn:\n      - h2\n      - http/1.1\n\n'
-        # VMESS-80 (优化版)
-        proxies += f'  - name: "{name}-{isp}-VMESS-80-{i}"\n    type: vmess\n    server: {cfip}\n    port: 80\n    uuid: {uuid}\n    alterId: 0\n    cipher: auto\n    tls: false\n    network: ws\n    ws-opts:\n      path: "/vmess-argo?ed=2560"\n      host: {argo_domain}\n    alpn:\n      - h2\n      - http/1.1\n\n'
-        # Trojan-TLS (优化版)
-        proxies += f'  - name: "{name}-{isp}-Trojan-TLS-{i}"\n    type: trojan\n    server: {cfip}\n    port: {cfport}\n    password: {uuid}\n    tls: true\n    servername: {argo_domain}\n    fp: chrome\n    network: ws\n    ws-opts:\n      path: "/trojan-argo?ed=2560"\n      host: {argo_domain}\n    alpn:\n      - h2\n      - http/1.1\n\n'
-
-    # 代理组
-    proxy_groups = f'''proxy-groups:
-  - name: "自动选择"
-    type: url-test
-    proxies:
-'''
-    for i, uuid in enumerate(uuid_arr, 1):
-        if not uuid: continue
-        proxy_groups += f'      - "{name}-{isp}-VLESS-TLS-{i}"\n      - "{name}-{isp}-VMESS-80-{i}"\n      - "{name}-{isp}-Trojan-TLS-{i}"\n'
-    proxy_groups += '''    url: "http://www.gstatic.com/generate_204"
-    interval: 300
-  - name: "全局代理"
-    type: select
-    proxies:
-      - "自动选择"
-      - "DIRECT"
-'''
-
-    # 核心规则：国内直连，国际全代理
-    rules = '''rules:
-  # 广告屏蔽
-  - GEOSITE,category-ads-all,BLOCK
-  
-  # 国内直连（所有中国网站）
-  - GEOSITE,cn,DIRECT
-  - GEOIP,cn,DIRECT
-  - DOMAIN-SUFFIX,.cn,DIRECT
-  - DOMAIN-SUFFIX,.中国,DIRECT
-  - GEOSITE,geolocation-cn,DIRECT
-  
-  # 内网直连
-  - GEOSITE,private,DIRECT
-  - GEOIP,private,DIRECT
-'''
-
-    # 自定义分流
-    if custom_domains:
-        for domain in custom_domains.split(','):
-            rules += f'  - DOMAIN-SUFFIX,{domain.strip()},全局代理\n'
-
-    # 兜底规则：所有非国内流量走代理
-    rules += '''  - MATCH,全局代理
-'''
-
-    # 写入配置
-    clash_yaml = proxies + proxy_groups + rules
-    with open('clash_config.yaml', 'w', encoding='utf-8') as f:
-        f.write(clash_yaml)
-    # 生成订阅
-    clash_sub = base64.b64encode(clash_yaml.encode('utf-8')).decode('utf-8')
-    with open('clash_sub.txt', 'w', encoding='utf-8') as f:
-        f.write(clash_sub)
-    return clash_yaml, clash_sub
-
-# 修改app.py生成完整节点和优化配置
-def patch_app():
-    with open('app.py', 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    # 优化Xray核心配置（全局代理+速度优化）
-    old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
-
-    new_config = '''config = {
-        "log": {
-            "access": "/dev/null",
-            "error": "/dev/null",
-            "loglevel": "none"
-        },
-        "inbounds": [
-            {
-                "port": ARGO_PORT,
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
-                    "decryption": "none",
-                    "fallbacks": [
-                        {"dest": 3001},
-                        {"path": "/vless-argo", "dest": 3002},
-                        {"path": "/vmess-argo", "dest": 3003},
-                        {"path": "/trojan-argo", "dest": 3004}
-                    ]
-                },
-                "streamSettings": {
-                    "network": "tcp",
-                    "tcpSettings": {"header": {"type": "none"}},
-                    "security": "tls",
-                    "tlsSettings": {"serverName": "cloudflare.com", "alpn": ["h2", "http/1.1"]}
-                }
-            },
-            {
-                "port": 3001,
-                "listen": "127.0.0.1",
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID}],
-                    "decryption": "none"
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {"path": "/", "headers": {"Host": "cloudflare.com"}}
-                }
-            },
-            {
-                "port": 3002,
-                "listen": "127.0.0.1",
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID, "level": 0}],
-                    "decryption": "none"
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {"path": "/vless-argo?ed=2560", "headers": {"Host": "cloudflare.com"}}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
-            },
-            {
-                "port": 3003,
-                "listen": "127.0.0.1",
-                "protocol": "vmess",
-                "settings": {
-                    "clients": [{"id": UUID, "alterId": 0}]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "wsSettings": {"path": "/vmess-argo?ed=2560", "headers": {"Host": "cloudflare.com"}}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
-            },
-            {
-                "port": 3004,
-                "listen": "127.0.0.1",
-                "protocol": "trojan",
-                "settings": {
-                    "clients": [{"password": UUID}]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {"path": "/trojan-argo?ed=2560", "headers": {"Host": "cloudflare.com"}}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
-            }
-        ],
-        "outbounds": [
-            {"protocol": "freedom", "tag": "direct"},  # 直连（国内网站）
-            {
-                "protocol": "vless",  # 主代理协议
-                "tag": "proxy",
-                "settings": {
-                    "vnext": [{
-                        "address": CFIP,
-                        "port": CFPORT,
-                        "users": [{"id": UUID, "flow": "xtls-rprx-vision"}]
-                    }]
-                },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "tls",
-                    "tlsSettings": {"serverName": CFIP, "allowInsecure": False}
-                }
-            },
-            {"protocol": "blackhole", "tag": "block"}  # 拦截广告
-        ],
-        "routing": {
-            "domainStrategy": "IPOnDemand",
-            "rules": [
-                # 国内网站直连
-                {"type": "field", "domain": ["geosite:cn", "geosite:private"], "outboundTag": "direct"},
-                {"type": "field", "ip": ["geoip:cn", "geoip:private"], "outboundTag": "direct"},
-                # 广告拦截
-                {"type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block"},
-                # 其余所有流量走代理（全球代理）
-                {"type": "field", "network": "tcp,udp", "outboundTag": "proxy"}
-            ]
-        },
-        "dns": {  # 优化DNS解析
-            "servers": [
-                "1.1.1.1",  # Cloudflare DNS
-                "8.8.8.8",  # Google DNS
-                {"address": "223.5.5.5", "domains": ["geosite:cn"]}  # 国内域名用阿里云DNS
-            ]
-        }
-    }'''
-
-    # 替换配置
-    content = content.replace(old_config, new_config)
-
-    # 修改generate_links函数，优化节点链接
-    old_generate_function = '''async def generate_links(argo_domain):
-    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
-    meta_info = meta_info.stdout.split('"')
-    ISP = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-
-    time.sleep(2)
-    VMESS = {"v": "2", "ps": f"{NAME}-{ISP}", "add": CFIP, "port": CFPORT, "id": UUID, "aid": "0", "scy": "none", "net": "ws", "type": "none", "host": argo_domain, "path": "/vmess-argo?ed=2560", "tls": "tls", "sni": argo_domain, "alpn": "", "fp": "chrome"}
- 
-    list_txt = f"""
-vless://{UUID}@{CFIP}:{CFPORT}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{NAME}-{ISP}
-  
-vmess://{ base64.b64encode(json.dumps(VMESS).encode('utf-8')).decode('utf-8')}
-
-trojan://{UUID}@{CFIP}:{CFPORT}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{NAME}-{ISP}
-    """
-    
-    with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
-        list_file.write(list_txt)
-
-    sub_txt = base64.b64encode(list_txt.encode('utf-8')).decode('utf-8')
-    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
-        sub_file.write(sub_txt)
-        
-    print(sub_txt)
-    
-    print(f"{FILE_PATH}/sub.txt saved successfully")
-    
-    # Additional actions
-    send_telegram()
-    upload_nodes()
- 
-    return sub_txt'''
-
-    new_generate_function = '''async def generate_links(argo_domain):
-    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
-    meta_info = meta_info.stdout.split('"')
-    ISP = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-
-    time.sleep(2)
-    # 优化VMESS配置
-    VMESS = {
-        "v": "2", 
-        "ps": f"{NAME}-{ISP}", 
-        "add": CFIP, 
-        "port": CFPORT, 
-        "id": UUID, 
-        "aid": "0", 
-        "scy": "none", 
-        "net": "ws", 
-        "type": "none", 
-        "host": argo_domain, 
-        "path": "/vmess-argo?ed=2560", 
-        "tls": "tls", 
-        "sni": argo_domain, 
-        "alpn": "h2,http/1.1",  # 启用HTTP/2提升速度
-        "fp": "chrome"
-    }
- 
-    # 增加vless+xtls协议链接（速度更快）
-    list_txt = f"""
-vless://{UUID}@{CFIP}:{CFPORT}?encryption=none&security=xtls&sni={argo_domain}&fp=chrome&type=tcp&flow=xtls-rprx-vision#{NAME}-{ISP}-xtls
-vless://{UUID}@{CFIP}:{CFPORT}?encryption=none&security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Fvless-argo%3Fed%3D2560#{NAME}-{ISP}-ws
-vmess://{ base64.b64encode(json.dumps(VMESS).encode('utf-8')).decode('utf-8')}
-trojan://{UUID}@{CFIP}:{CFPORT}?security=tls&sni={argo_domain}&fp=chrome&type=ws&host={argo_domain}&path=%2Ftrojan-argo%3Fed%3D2560#{NAME}-{ISP}
-    """
-    
-    with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
-        list_file.write(list_txt.strip())
-
-    sub_txt = base64.b64encode(list_txt.strip().encode('utf-8')).decode('utf-8')
-    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
-        sub_file.write(sub_txt)
-        
-    print(sub_txt)
-    
-    print(f"{FILE_PATH}/sub.txt saved successfully")
-    
-    # Additional actions
-    send_telegram()
-    upload_nodes()
- 
-    return sub_txt'''
-
-    # 替换生成链接的函数
-    content = content.replace(old_generate_function, new_generate_function)
-
-    # 写入修改后的内容
-    with open('app.py', 'w', encoding='utf-8') as f:
-        f.write(content)
-
-if __name__ == "__main__":
-    patch_app()
-EOF
-
-# 执行补丁脚本（传入环境变量）
-MULTI_UUIDS="$MULTI_UUIDS" CUSTOM_DOMAINS="$CUSTOM_DOMAINS" python3 protocol_patch.py && rm protocol_patch.py
-echo -e "${GREEN}节点配置生成完成${NC}"
-
-# 14. 启动服务
-echo -e "${BLUE}启动服务...${NC}"
-pkill -f "python3 app.py" > /dev/null 2>&1
-sleep 2
-python3 app.py > app.log 2>&1 &
-APP_PID=$!
-if [ -z "$APP_PID" ] || [ "$APP_PID" -eq 0 ]; then
-    nohup python3 app.py > app.log 2>&1 &
-    sleep 2
-    APP_PID=$(get_service_pid "python3 app.py")
-    [ -z "$APP_PID" ] && echo -e "${RED}服务启动失败，请查看日志${NC}" && exit 1
-fi
-echo -e "${GREEN}主服务已启动（PID: $APP_PID）${NC}"
-
-# 15. 启动保活服务
-KEEPALIVE_PID=""
-if [ "$KEEP_ALIVE_HF" = "true" ]; then
-    echo -e "${BLUE}启动保活服务...${NC}"
-    cat > keep_alive_task.sh << EOF
-#!/bin/bash
-while true; do
-    status_code=\$(curl -s -o /dev/null -w "%{http_code}" --header "Authorization: Bearer $HF_TOKEN" "https://huggingface.co/api/spaces/$HF_REPO_ID")
-    if [ "\$status_code" -eq 200 ]; then
-        echo "保活成功（\$(date)）" > keep_alive_status.log
-    else
-        echo "保活失败（状态码：\$status_code，\$(date)）" > keep_alive_status.log
-    fi
-    sleep 120
-done
-EOF
-    chmod +x keep_alive_task.sh
-    nohup ./keep_alive_task.sh >/dev/null 2>&1 &
-    KEEPALIVE_PID=$!
-    echo -e "${GREEN}保活服务已启动（PID: $KEEPALIVE_PID）${NC}"
-fi
-
-# 16. 等待节点生成
-echo -e "${BLUE}等待节点生成（最多10分钟）...${NC}"
-MAX_WAIT=600
-WAIT_COUNT=0
-NODE_INFO=""
-while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-    if [ -f ".cache/sub.txt" ] && [ -n "$(cat .cache/sub.txt 2>/dev/null)" ]; then
-        NODE_INFO=$(cat .cache/sub.txt)
-        break
-    elif [ -f "sub.txt" ] && [ -n "$(cat sub.txt 2>/dev/null)" ]; then
-        NODE_INFO=$(cat sub.txt)
-        break
-    fi
-    [ $((WAIT_COUNT % 30)) -eq 0 ] && echo -e "${YELLOW}已等待 $((WAIT_COUNT/60)) 分 $((WAIT_COUNT%60)) 秒...${NC}"
-    sleep 5
-    WAIT_COUNT=$((WAIT_COUNT + 5))
-done
-
-# 17. 输出结果
-if [ -n "$NODE_INFO" ]; then
-    SERVICE_PORT=$(grep "PORT = int" app.py | grep -o "or [0-9]*" | cut -d" " -f2)
-    CURRENT_UUID=$(grep "UUID = " app.py | head -1 | cut -d"'" -f2)
-    SUB_PATH_VALUE=$(grep "SUB_PATH = " app.py | cut -d"'" -f4)
-    PUBLIC_IP=$(curl -s https://api.ipify.org 2>/dev/null || "获取失败")
-    DECODED_NODES=$(echo "$NODE_INFO" | base64 -d 2>/dev/null || echo "$NODE_INFO")
-
-    # 保存节点信息
-    SAVE_INFO="========================================
-                      节点信息                      
-========================================
-部署时间: $(date)
-UUID: $( [ -n "$MULTI_UUIDS" ] && echo "$MULTI_UUIDS" || echo "$CURRENT_UUID" )
-服务端口: $SERVICE_PORT
-优选IP: $BEST_CFIP
-订阅地址: http://$PUBLIC_IP:$SERVICE_PORT/$SUB_PATH_VALUE
-Clash配置: $PROJECT_DIR_NAME/clash_config.yaml
-支持协议: ${PROTOCOLS[*]}
-=== 节点列表 ===
-$DECODED_NODES
-=== 管理命令 ===
-查看日志: tail -f $PROJECT_DIR_NAME/app.log
-重启服务: ./$0 4
-"
-    echo "$SAVE_INFO" > "$NODE_INFO_FILE"
-
-    # 终端输出
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}               部署完成！               ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${YELLOW}订阅地址:${NC} ${GREEN}http://$PUBLIC_IP:$SERVICE_PORT/$SUB_PATH_VALUE${NC}"
-    echo -e "${YELLOW}Clash配置已生成，可通过菜单3管理${NC}"
-    echo -e "${YELLOW}节点信息已保存至:${NC} ${GREEN}$NODE_INFO_FILE${NC}"
-else
-    echo -e "${RED}节点生成超时！${NC}"
-    echo -e "${YELLOW}查看日志: tail -f $PROJECT_DIR_NAME/app.log${NC}"
+if [ ! -f "app.py" ]; then
+    echo -e "${RED}未找到app.py文件！${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}脚本执行完成${NC}"
-exit 0
+cp app.py app.py.backup
+echo -e "${YELLOW}已备份原始文件为 app.py.backup${NC}"
+
+# 初始化保活变量
+KEEP_ALIVE_HF="false"
+HF_TOKEN=""
+HF_REPO_ID=""
+
+# 定义保活配置函数
+configure_hf_keep_alive() {
+    echo
+    echo -e "${YELLOW}是否设置 Hugging Face API 自动保活? (y/n)${NC}"
+    read -p "> " SETUP_KEEP_ALIVE
+    if [ "$SETUP_KEEP_ALIVE" = "y" ] || [ "$SETUP_KEEP_ALIVE" = "Y" ]; then
+        echo -e "${YELLOW}请输入您的 Hugging Face 访问令牌 (Token):${NC}"
+        echo -e "${BLUE}（令牌用于API认证，输入时将不可见。请前往 https://huggingface.co/settings/tokens 获取）${NC}"
+        read -sp "Token: " HF_TOKEN_INPUT
+        echo
+        if [ -z "$HF_TOKEN_INPUT" ]; then
+            echo -e "${RED}错误：Token 不能为空。已取消保活设置。${NC}"
+            return
+        fi
+
+        echo -e "${YELLOW}请输入要访问的 Hugging Face 仓库ID (模型或Space均可，例如: joeyhuangt/aaaa):${NC}"
+        read -p "Repo ID: " HF_REPO_ID_INPUT
+        if [ -z "$HF_REPO_ID_INPUT" ]; then
+            echo -e "${RED}错误：仓库ID 不能为空。已取消保活设置。${NC}"
+            return
+        fi
+
+        HF_TOKEN="$HF_TOKEN_INPUT"
+        HF_REPO_ID="$HF_REPO_ID_INPUT"
+        KEEP_ALIVE_HF="true"
+        echo -e "${GREEN}Hugging Face API 保活已设置！${NC}"
+        echo -e "${GREEN}目标仓库: $HF_REPO_ID${NC}"
+    fi
+}
+
+# 新增：优选IP列表优化（提升连接速度）
+optimize_ip_selection() {
+    echo -e "${BLUE}正在优化优选IP列表...${NC}"
+    # 替换为速度更快的优选IP池
+    sed -i "s/joeyblog.net/cf-ip.net/g" app.py
+    # 增加多个备选IP
+    sed -i "/CFIP = os.environ.get/a\CF_IPS = ['cf-ip.net', 'cloudflare-ip.com', 'fastly.net']" app.py
+    echo -e "${GREEN}IP优化完成，将自动选择最快节点连接${NC}"
+}
+
+if [ "$MODE_CHOICE" = "1" ]; then
+    echo -e "${BLUE}=== 极速模式 ===${NC}"
+    echo
+    
+    echo -e "${YELLOW}当前UUID: $(grep "UUID = " app.py | head -1 | cut -d"'" -f2)${NC}"
+    read -p "请输入新的 UUID (留空自动生成): " UUID_INPUT
+    if [ -z "$UUID_INPUT" ]; then
+        UUID_INPUT=$(generate_uuid)
+        echo -e "${GREEN}自动生成UUID: $UUID_INPUT${NC}"
+    fi
+    
+    sed -i "s/UUID = os.environ.get('UUID', '[^']*')/UUID = os.environ.get('UUID', '$UUID_INPUT')/" app.py
+    echo -e "${GREEN}UUID 已设置为: $UUID_INPUT${NC}"
+    
+    # 应用IP优化
+    optimize_ip_selection
+    
+    configure_hf_keep_alive
+    
+    # 新增：默认启用全球代理模式
+    echo -e "${GREEN}已启用全球代理模式，支持所有境外网络访问${NC}"
+    echo
+    echo -e "${GREEN}极速配置完成！正在启动服务...${NC}"
+    echo
+    
+else
+    echo -e "${BLUE}=== 完整配置模式 ===${NC}"
+    echo
+    
+    echo -e "${YELLOW}当前UUID: $(grep "UUID = " app.py | head -1 | cut -d"'" -f2)${NC}"
+    read -p "请输入新的 UUID (留空自动生成): " UUID_INPUT
+    if [ -z "$UUID_INPUT" ]; then
+        UUID_INPUT=$(generate_uuid)
+        echo -e "${GREEN}自动生成UUID: $UUID_INPUT${NC}"
+    fi
+    sed -i "s/UUID = os.environ.get('UUID', '[^']*')/UUID = os.environ.get('UUID', '$UUID_INPUT')/" app.py
+    echo -e "${GREEN}UUID 已设置为: $UUID_INPUT${NC}"
+
+    echo -e "${YELLOW}当前节点名称: $(grep "NAME = " app.py | head -1 | cut -d"'" -f4)${NC}"
+    read -p "请输入节点名称 (留空保持不变): " NAME_INPUT
+    if [ -n "$NAME_INPUT" ]; then
+        sed -i "s/NAME = os.environ.get('NAME', '[^']*')/NAME = os.environ.get('NAME', '$NAME_INPUT')/" app.py
+        echo -e "${GREEN}节点名称已设置为: $NAME_INPUT${NC}"
+    fi
+
+    echo -e "${YELLOW}当前服务端口: $(grep "PORT = int" app.py | grep -o "or [0-9]*" | cut -d" " -f2)${NC}"
+    read -p "请输入服务端口 (留空保持不变): " PORT_INPUT
+    if [ -n "$PORT_INPUT" ]; then
+        sed -i "s/PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or [0-9]*)/PORT = int(os.environ.get('SERVER_PORT') or os.environ.get('PORT') or $PORT_INPUT)/" app.py
+        echo -e "${GREEN}端口已设置为: $PORT_INPUT${NC}"
+    fi
+
+    echo -e "${YELLOW}当前优选IP: $(grep "CFIP = " app.py | cut -d"'" -f4)${NC}"
+    read -p "请输入优选IP/域名 (留空使用默认高速节点): " CFIP_INPUT
+    if [ -z "$CFIP_INPUT" ]; then
+        CFIP_INPUT="cf-ip.net"  # 使用更快的默认IP
+        optimize_ip_selection
+    else
+        sed -i "s/CFIP = os.environ.get('CFIP', '[^']*')/CFIP = os.environ.get('CFIP', '$CFIP_INPUT')/" app.py
+        echo -e "${GREEN}优选IP已设置为: $CFIP_INPUT${NC}"
+    fi
+
+    echo -e "${YELLOW}当前优选端口: $(grep "CFPORT = " app.py | cut -d"'" -f4)${NC}"
+    read -p "请输入优选端口 (留空保持不变): " CFPORT_INPUT
+    if [ -n "$CFPORT_INPUT" ]; then
+        sed -i "s/CFPORT = int(os.environ.get('CFPORT', '[^']*'))/CFPORT = int(os.environ.get('CFPORT', '$CFPORT_INPUT'))/" app.py
+        echo -e "${GREEN}优选端口已设置为: $CFPORT_INPUT${NC}"
+    fi
+
+    echo -e "${YELLOW}当前Argo端口: $(grep "ARGO_PORT = " app.py | cut -d"'" -f4)${NC}"
+    read -p "请输入 Argo 端口 (留空保持不变): " ARGO_PORT_INPUT
+    if [ -n "$ARGO_PORT_INPUT" ]; then
+        sed -i "s/ARGO_PORT = int(os.environ.get('ARGO_PORT', '[^']*'))/ARGO_PORT = int(os.environ.get('ARGO_PORT', '$ARGO_PORT_INPUT'))/" app.py
+        echo -e "${GREEN}Argo端口已设置为: $ARGO_PORT_INPUT${NC}"
+    fi
+
+    echo -e "${YELLOW}当前订阅路径: $(grep "SUB_PATH = " app.py | cut -d"'" -f4)${NC}"
+    read -p "请输入订阅路径 (留空保持不变): " SUB_PATH_INPUT
+    if [ -n "$SUB_PATH_INPUT" ]; then
+        sed -i "s/SUB_PATH = os.environ.get('SUB_PATH', '[^']*')/SUB_PATH = os.environ.get('SUB_PATH', '$SUB_PATH_INPUT')/" app.py
+        echo -e "${GREEN}订阅路径已设置为: $SUB_PATH_INPUT${NC}"
+    fi
+
+    # 新增：代理模式选择
+    echo
+    echo -e "${YELLOW}请选择代理模式:${NC}"
+    echo -e "${BLUE}1) 全球代理模式 (所有流量通过代理)${NC}"
+    echo -e "${BLUE}2) 智能分流模式 (国内网站直连，境外网站代理)${NC}"
+    read -p "请输入选择 (1/2): " PROXY_MODE
+    if [ "$PROXY_MODE" = "1" ]; then
+        PROXY_MODE="global"
+    else
+        PROXY_MODE="smart"
+    fi
+
+    echo
+    echo -e "${YELLOW}是否配置高级选项? (y/n)${NC}"
+    read -p "> " ADVANCED_CONFIG
+
+    if [ "$ADVANCED_CONFIG" = "y" ] || [ "$ADVANCED_CONFIG" = "Y" ]; then
+        echo -e "${YELLOW}当前上传URL: $(grep "UPLOAD_URL = " app.py | cut -d"'" -f4)${NC}"
+        read -p "请输入上传URL (留空保持不变): " UPLOAD_URL_INPUT
+        if [ -n "$UPLOAD_URL_INPUT" ]; then
+            sed -i "s|UPLOAD_URL = os.environ.get('UPLOAD_URL', '[^']*')|UPLOAD_URL = os.environ.get('UPLOAD_URL', '$UPLOAD_URL_INPUT')|" app.py
+            echo -e "${GREEN}上传URL已设置${NC}"
+        fi
+
+        echo -e "${YELLOW}当前项目URL: $(grep "PROJECT_URL = " app.py | cut -d"'" -f4)${NC}"
+        read -p "请输入项目URL (留空保持不变): " PROJECT_URL_INPUT
+        if [ -n "$PROJECT_URL_INPUT" ]; then
+            sed -i "s|PROJECT_URL = os.environ.get('PROJECT_URL', '[^']*')|PROJECT_URL = os.environ.get('PROJECT_URL', '$PROJECT_URL_INPUT')|" app.py
+            echo -e "${GREEN}项目URL已设置${NC}"
+        fi
+
+        configure_hf_keep_alive
+
+        echo -e "${YELLOW}当前哪吒服务器: $(grep "NEZHA_SERVER = " app.py | cut -d"'" -f4)${NC}"
+        read -p "请输入哪吒服务器地址 (留空保持不变): " NEZHA_SERVER_INPUT
+        if [ -n "$NEZHA_SERVER_INPUT" ]; then
+            sed -i "s|NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '[^']*')|NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '$NEZHA_SERVER_INPUT')|" app.py
+            
+            echo -e "${YELLOW}当前哪吒端口: $(grep "NEZHA_PORT = " app.py | cut -d"'" -f4)${NC}"
+            read -p "请输入哪吒端口 (v1版本留空): " NEZHA_PORT_INPUT
+            if [ -n "$NEZHA_PORT_INPUT" ]; then
+                sed -i "s|NEZHA_PORT = os.environ.get('NEZHA_PORT', '[^']*')|NEZHA_PORT = os.environ.get('NEZHA_PORT', '$NEZHA_PORT_INPUT')|" app.py
+            fi
+            
+            echo -e "${YELLOW}当前哪吒密钥: $(grep "NEZHA_KEY = " app.py | cut -d"'" -f4)${NC}"
+            read -p "请输入哪吒密钥: " NEZHA_KEY_INPUT
+            if [ -n "$NEZHA_KEY_INPUT" ]; then
+                sed -i "s|NEZHA_KEY = os.environ.get('NEZHA_KEY', '[^']*')|NEZHA_KEY = os.environ.get('NEZHA_KEY', '$NEZHA_KEY_INPUT')|" app.py
+            fi
+            echo -e "${GREEN}哪吒配置已设置${NC}"
+        fi
+
+        echo -e "${YELLOW}当前Argo域名: $(grep "ARGO_DOMAIN = " app.py | cut -d"'" -f4)${NC}"
+        read -p "请输入 Argo 固定隧道域名 (留空保持不变): " ARGO_DOMAIN_INPUT
+        if [ -n "$ARGO_DOMAIN_INPUT" ]; then
+            sed -i "s|ARGO_DOMAIN = os.environ.get('ARGO_DOMAIN', '[^']*')|ARGO_DOMAIN = os.environ.get('ARGO_DOMAIN', '$ARGO_DOMAIN_INPUT')|" app.py
+            
+            echo -e "${YELLOW}当前Argo密钥: $(grep "ARGO_AUTH = " app.py | cut -d"'" -f4)${NC}"
+            read -p "请输入 Argo 固定隧道密钥: " ARGO_AUTH_INPUT
+            if [ -n "$ARGO_AUTH_INPUT" ]; then
+                sed -i "s|ARGO_AUTH = os.environ.get('ARGO_AUTH', '[^']*')|ARGO_AUTH = os.environ.get('ARGO_AUTH', '$ARGO_AUTH_INPUT')|" app.py
+            fi
+            echo -e "${GREEN}Argo固定隧道配置已设置${NC}"
+        fi
+
+        echo -e "${YELLOW}当前Bot Token: $(grep "BOT_TOKEN = " app.py | cut -d"'" -f4)${NC}"
+        read -p "请输入 Telegram Bot Token (留空保持不变): " BOT_TOKEN_INPUT
+        if [ -n "$BOT_TOKEN_INPUT" ]; then
+            sed -i "s|BOT_TOKEN = os.environ.get('BOT_TOKEN', '[^']*')|BOT_TOKEN = os.environ.get('BOT_TOKEN', '$BOT_TOKEN_INPUT')|" app.py
+            
+            echo -e "${YELLOW}当前Chat ID: $(grep "CHAT_ID = " app.py | cut -d"'" -f4)${NC}"
+            read -p "请输入 Telegram Chat ID: " CHAT_ID_INPUT
+            if [ -n "$CHAT_ID_INPUT" ]; then
+                sed -i "s|CHAT_ID = os.environ.get('CHAT_ID', '[^']*')|CHAT_ID = os.environ.get('CHAT_ID', '$CHAT_ID_INPUT')|" app.py
+            fi
+            echo -e "${GREEN}Telegram配置已设置${NC}"
+        fi
+    fi
+    
+    # 根据选择应用代理模式
+    if [ "$PROXY_MODE" = "global" ]; then
+        echo -e "${GREEN}已启用全球代理模式，支持所有境外网络访问${NC}"
+    else
+        echo -e "${GREEN}已启用智能分流模式，优化访问速度${NC}"
+    fi
+
+    echo
+    echo -e "${GREEN}完整配置完成！${NC}"
+fi
+
+echo -e "${YELLOW}=== 当前配置摘要 ===${NC}"
+echo -e "UUID: $(grep "UUID = " app.py | head -1 | cut -d"'" -f2)"
+echo -e "节点名称: $(grep "NAME = " app.py | head -1 | cut -d"'" -f4)"
+echo -e "服务端口: $(grep "PORT = int" app.py | grep -o "or [0-9]*" | cut -d" " -f2)"
+echo -e "优选IP: $(grep "CFIP = " app.py | cut -d"'" -f4)"
+echo -e "优选端口: $(grep "CFPORT = " app.py | cut -d"'" -f4)"
+echo -e "订阅路径: $(grep "SUB_PATH = " app.py | cut -d"'" -f4)"
+if [ "$KEEP_ALIVE_HF" = "true" ]; then
+    echo -e "保活仓库: $HF_REPO_ID"
+fi
+echo -e "代理模式: $(if [ "$PROXY_MODE" = "global" ]; then echo "全球代理"; else echo "智能分流"; fi)"
+echo -e "${YELLOW}========================${NC}"
+echo
+
+echo -e "${BLUE}正在启动服务...${NC}"
+echo -e "${YELLOW}当前工作目录：$(pwd)${NC}"
+echo
+
+# 修改Python文件添加优化的分流规则和多端口支持
+echo -e "${BLUE}正在配置优化的代理规则...${NC}"
+cat > proxy_optimize.py << 'EOF'
+# coding: utf-8
+import os, re
+
+# 读取app.py文件
+with open('app.py', 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 增强分流规则 - 支持全球代理
+new_routing = '''
+    "routing": {
+        "domainStrategy": "IPOnDemand",
+        "rules": [
+            {"type": "field", "domain": ["geosite:cn", "geosite:private"], "outboundTag": "direct"},
+            {"type": "field", "ip": ["geoip:cn", "geoip:private"], "outboundTag": "direct"},
+            {"type": "field", "domain": ["geosite:geolocation-!cn"], "outboundTag": "proxy"},
+            {"type": "field", "ip": ["geoip:!cn"], "outboundTag": "proxy"}
+        ]
+    }
+'''
+
+# 替换原有的路由配置
+if '"routing":' in content:
+    content = re.sub(r'"routing":\s*\{[^}]+\}', new_routing, content, flags=re.DOTALL)
+else:
+    # 如果没有路由配置，添加到config中
+    content = re.sub(r'("outbounds":\s*\[[^]]+\])', r'\1,' + new_routing, content, flags=re.DOTALL)
+
+# 添加多端口支持提升连接稳定性
+content = re.sub(r'("port":\s*ARGO_PORT)', r'\1,\n            "portRange": "1024-65535"', content)
+
+# 写入修改后的内容
+with open('app.py', 'w', encoding='utf-8') as f:
+    f.write(content)
+
+print("代理规则优化完成")
+EOF
+
+# 执行优化脚本
+python3 proxy_optimize.py
+
+# 启动服务时添加网络优化参数
+if [ "$FAST_MODE" = "true" ]; then
+    echo -e "${YELLOW}使用快速模式启动服务...${NC}"
+    nohup python3 app.py --fast &
+else
+    nohup python3 app.py &
+fi
+
+# 等待服务启动
+sleep 5
+
+# 显示节点信息
+echo -e "${GREEN}服务启动成功！${NC}"
+echo -e "${YELLOW}节点信息已保存到 ${NODE_INFO_FILE}${NC}"
+echo -e "${BLUE}可以使用 ./test.sh -v 查看节点信息${NC}"
