@@ -387,6 +387,7 @@ echo -e "${YELLOW}当前工作目录：$(pwd)${NC}"
 echo
 
 # 修改Python文件添加YouTube分流到xray配置，并增加80端口节点
+# 修改Python文件添加YouTube分流到xray配置，并增加80端口节点
 echo -e "${BLUE}正在添加YouTube分流功能和80端口节点...${NC}"
 cat > youtube_patch.py << 'EOF'
 # coding: utf-8
@@ -400,130 +401,130 @@ with open('app.py', 'r', encoding='utf-8') as f:
 old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
 
 new_config = '''config = {
-        "log": {
-            "access": "/dev/null",
-            "error": "/dev/null",
-            "loglevel": "none"
+    "log": {
+        "access": "/dev/null",
+        "error": "/dev/null",
+        "loglevel": "none"
+    },
+    "inbounds": [
+        {
+            "port": ARGO_PORT,
+            "protocol": "vless",
+            "settings": {
+                "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
+                "decryption": "none",
+                "fallbacks": [
+                    {"dest": 3001},
+                    {"path": "/vless-argo", "dest": 3002},
+                    {"path": "/vmess-argo", "dest": 3003},
+                    {"path": "/trojan-argo", "dest": 3004}
+                ]
+            },
+            "streamSettings": {"network": "tcp"}
         },
-        "inbounds": [
-            {
-                "port": ARGO_PORT,
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
-                    "decryption": "none",
-                    "fallbacks": [
-                        {"dest": 3001},
-                        {"path": "/vless-argo", "dest": 3002},
-                        {"path": "/vmess-argo", "dest": 3003},
-                        {"path": "/trojan-argo", "dest": 3004}
-                    ]
-                },
-                "streamSettings": {"network": "tcp"}
+        {
+            "port": 3001,
+            "listen": "127.0.0.1",
+            "protocol": "vless",
+            "settings": {
+                "clients": [{"id": UUID}],
+                "decryption": "none"
             },
-            {
-                "port": 3001,
-                "listen": "127.0.0.1",
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID}],
-                    "decryption": "none"
-                },
-                "streamSettings": {"network": "ws", "security": "none"}
+            "streamSettings": {"network": "ws", "security": "none"}
+        },
+        {
+            "port": 3002,
+            "listen": "127.0.0.1",
+            "protocol": "vless",
+            "settings": {
+                "clients": [{"id": UUID, "level": 0}],
+                "decryption": "none"
             },
-            {
-                "port": 3002,
-                "listen": "127.0.0.1",
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": UUID, "level": 0}],
-                    "decryption": "none"
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {"path": "/vless-argo"}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {"path": "/vless-argo"}
             },
-            {
-                "port": 3003,
-                "listen": "127.0.0.1",
-                "protocol": "vmess",
-                "settings": {
-                    "clients": [{"id": UUID, "alterId": 0}]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "wsSettings": {"path": "/vmess-argo"}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
-            },
-            {
-                "port": 3004,
-                "listen": "127.0.0.1",
-                "protocol": "trojan",
-                "settings": {
-                    "clients": [{"password": UUID}]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {"path": "/trojan-argo"}
-                },
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "metadataOnly": False
-                }
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+                "metadataOnly": False
             }
-        ],
-        "outbounds": [
-            {"protocol": "freedom", "tag": "direct"},
-            {
-                "protocol": "vmess",
-                "tag": "youtube",
-                "settings": {
-                    "vnext": [{
-                        "address": "172.233.171.224",
-                        "port": 16416,
-                        "users": [{
-                            "id": "8c1b9bea-cb51-43bb-a65c-0af31bbbf145",
-                            "alterId": 0
-                        }]
-                    }]
-                },
-                "streamSettings": {"network": "tcp"}
+        },
+        {
+            "port": 3003,
+            "listen": "127.0.0.1",
+            "protocol": "vmess",
+            "settings": {
+                "clients": [{"id": UUID, "alterId": 0}]
             },
-            {"protocol": "blackhole", "tag": "block"}
-        ],
-        "routing": {
-            "domainStrategy": "IPIfNonMatch",
-            "rules": [
-                {
-                    "type": "field",
-                    "domain": [
-                        "youtube.com", "youtu.be",
-                        "googlevideo.com",
-                        "ytimg.com",
-                        "gstatic.com",
-                        "googleapis.com",
-                        "ggpht.com",
-                        "googleusercontent.com"
-                    ],
-                    "outboundTag": "youtube"
-                }
-            ]
+            "streamSettings": {
+                "network": "ws",
+                "wsSettings": {"path": "/vmess-argo"}
+            },
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+                "metadataOnly": False
+            }
+        },
+        {
+            "port": 3004,
+            "listen": "127.0.0.1",
+            "protocol": "trojan",
+            "settings": {
+                "clients": [{"password": UUID}]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {"path": "/trojan-argo"}
+            },
+            "sniffing": {
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic"],
+                "metadataOnly": False
+            }
         }
-    }'''
+    ],
+    "outbounds": [
+        {"protocol": "freedom", "tag": "direct"},
+        {
+            "protocol": "vmess",
+            "tag": "youtube",
+            "settings": {
+                "vnext": [{
+                    "address": "172.233.171.224",
+                    "port": 16416,
+                    "users": [{
+                        "id": "8c1b9bea-cb51-43bb-a65c-0af31bbbf145",
+                        "alterId": 0
+                    }]
+                }]
+            },
+            "streamSettings": {"network": "tcp"}
+        },
+        {"protocol": "blackhole", "tag": "block"}
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "domain": [
+                    "youtube.com", "youtu.be",
+                    "googlevideo.com",
+                    "ytimg.com",
+                    "gstatic.com",
+                    "googleapis.com",
+                    "ggpht.com",
+                    "googleusercontent.com"
+                ],
+                "outboundTag": "youtube"
+            }
+        ]
+    }
+}'''
 
 # 替换配置
 content = content.replace(old_config, new_config)
@@ -854,3 +855,4 @@ echo -e "${GREEN}部署完成！感谢使用！${NC}"
 
 # 退出脚本，避免重复执行
 exit 0
+
