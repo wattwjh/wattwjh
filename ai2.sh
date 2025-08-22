@@ -9,7 +9,7 @@ NC='\033[0m'
 NODE_INFO_FILE="$HOME/.xray_nodes_info"
 PROJECT_DIR_NAME="python-xray-argo"
 
-# 查看节点信息
+# 如果是-v参数，直接查看节点信息
 if [ "$1" = "-v" ]; then
     if [ -f "$NODE_INFO_FILE" ]; then
         echo -e "${GREEN}========================================${NC}"
@@ -46,14 +46,17 @@ echo -e "${BLUE}脚本仓库: ${YELLOW}https://github.com/byJoey/free-vps-py${NC
 echo -e "${BLUE}TG交流群: ${YELLOW}https://t.me/+ft-zI76oovgwNmRh${NC}"
 echo -e "${RED}脚本作者YouTube: ${YELLOW}https://www.youtube.com/@joeyblog${RED}"
 echo
-echo -e "${GREEN}本脚本支持全局代理或除中国外代理模式${NC}"
-echo -e "${GREEN}优化保活机制，提高服务稳定性${NC}"
+echo -e "${GREEN}本脚本基于 eooce 大佬的 Python Xray Argo 项目开发${NC}"
+echo -e "${GREEN}提供极速和完整两种配置模式，简化部署流程${NC}"
+echo -e "${GREEN}支持自动UUID生成、后台运行、节点信息输出${NC}"
+echo -e "${GREEN}默认集成YouTube分流优化，支持交互式查看节点信息${NC}"
+echo
 
 echo -e "${YELLOW}请选择操作:${NC}"
 echo -e "${BLUE}1) 极速模式 - 只修改UUID并启动${NC}"
 echo -e "${BLUE}2) 完整模式 - 详细配置所有选项${NC}"
-echo -e "${BLUE}3) 查看节点信息${NC}"
-echo -e "${BLUE}4) 查看保活状态${NC}"
+echo -e "${BLUE}3) 查看节点信息 - 显示已保存的节点信息${NC}"
+echo -e "${BLUE}4) 查看保活状态 - 检查Hugging Face API保活状态${NC}"
 echo
 read -p "请输入选择 (1/2/3/4): " MODE_CHOICE
 
@@ -108,6 +111,7 @@ if [ "$MODE_CHOICE" = "4" ]; then
         echo -e "服务状态: ${GREEN}运行中${NC}"
         echo -e "进程PID: ${BLUE}$KEEPALIVE_PID${NC}"
         if [ -f "keep_alive_task.sh" ]; then
+            # 更新为从 spaces API 地址中解析
             REPO_ID=$(grep 'huggingface.co/api/spaces/' keep_alive_task.sh | head -1 | sed -n 's|.*api/spaces/\([^"]*\).*|\1|p')
             echo -e "目标仓库: ${YELLOW}$REPO_ID (类型: Space)${NC}"
         fi
@@ -116,7 +120,7 @@ if [ "$MODE_CHOICE" = "4" ]; then
         if [ -f "keep_alive_status.log" ]; then
            cat keep_alive_status.log
         else
-           echo -e "${YELLOW}尚未生成状态日志，请稍等片刻后重试...${NC}"
+           echo -e "${YELLOW}尚未生成状态日志，请稍等片刻(最多2分钟)后重试...${NC}"
         fi
     else
         echo -e "服务状态: ${RED}未运行${NC}"
@@ -182,16 +186,6 @@ KEEP_ALIVE_HF="false"
 HF_TOKEN=""
 HF_REPO_ID=""
 
-# 代理模式选择
-PROXY_MODE="global"  # 默认全局代理
-echo -e "${YELLOW}请选择代理模式:${NC}"
-echo -e "${BLUE}1) 全局代理 - 所有流量通过代理${NC}"
-echo -e "${BLUE}2) 智能代理 - 中国境内流量直连，境外流量代理${NC}"
-read -p "请输入选择 (1/2，默认1): " PROXY_CHOICE
-if [ "$PROXY_CHOICE" = "2" ]; then
-    PROXY_MODE="smart"
-fi
-
 # 定义保活配置函数
 configure_hf_keep_alive() {
     echo
@@ -199,7 +193,7 @@ configure_hf_keep_alive() {
     read -p "> " SETUP_KEEP_ALIVE
     if [ "$SETUP_KEEP_ALIVE" = "y" ] || [ "$SETUP_KEEP_ALIVE" = "Y" ]; then
         echo -e "${YELLOW}请输入您的 Hugging Face 访问令牌 (Token):${NC}"
-        echo -e "${BLUE}（令牌用于API认证，输入时将不可见）${NC}"
+        echo -e "${BLUE}（令牌用于API认证，输入时将不可见。请前往 https://huggingface.co/settings/tokens 获取 不会使用看视频教程https://youtu.be/ZRaUWQMjR_c）${NC}"
         read -sp "Token: " HF_TOKEN_INPUT
         echo
         if [ -z "$HF_TOKEN_INPUT" ]; then
@@ -207,7 +201,7 @@ configure_hf_keep_alive() {
             return
         fi
 
-        echo -e "${YELLOW}请输入要访问的 Hugging Face 仓库ID (例如: joeyhuangt/aaaa):${NC}"
+        echo -e "${YELLOW}请输入要访问的 Hugging Face 仓库ID (模型或Space均可，例如: joeyhuangt/aaaa):${NC}"
         read -p "Repo ID: " HF_REPO_ID_INPUT
         if [ -z "$HF_REPO_ID_INPUT" ]; then
             echo -e "${RED}错误：仓库ID 不能为空。已取消保活设置。${NC}"
@@ -241,7 +235,7 @@ if [ "$MODE_CHOICE" = "1" ]; then
     
     configure_hf_keep_alive
     
-    echo -e "${GREEN}代理模式: ${YELLOW}$(if [ "$PROXY_MODE" = "global" ]; then echo "全局代理"; else echo "智能代理"; fi)${NC}"
+    echo -e "${GREEN}YouTube分流已自动配置${NC}"
     echo
     echo -e "${GREEN}极速配置完成！正在启动服务...${NC}"
     echo
@@ -369,7 +363,8 @@ else
         fi
     fi
     
-    echo -e "${GREEN}代理模式: ${YELLOW}$(if [ "$PROXY_MODE" = "global" ]; then echo "全局代理"; else echo "智能代理"; fi)${NC}"
+    echo -e "${GREEN}YouTube分流已自动配置${NC}"
+
     echo
     echo -e "${GREEN}完整配置完成！${NC}"
 fi
@@ -381,7 +376,6 @@ echo -e "服务端口: $(grep "PORT = int" app.py | grep -o "or [0-9]*" | cut -d
 echo -e "优选IP: $(grep "CFIP = " app.py | cut -d"'" -f4)"
 echo -e "优选端口: $(grep "CFPORT = " app.py | cut -d"'" -f4)"
 echo -e "订阅路径: $(grep "SUB_PATH = " app.py | cut -d"'" -f4)"
-echo -e "代理模式: $(if [ "$PROXY_MODE" = "global" ]; then echo "全局代理"; else echo "智能代理"; fi)"
 if [ "$KEEP_ALIVE_HF" = "true" ]; then
     echo -e "保活仓库: $HF_REPO_ID"
 fi
@@ -392,21 +386,20 @@ echo -e "${BLUE}正在启动服务...${NC}"
 echo -e "${YELLOW}当前工作目录：$(pwd)${NC}"
 echo
 
-# 生成代理配置补丁
-echo -e "${BLUE}正在配置代理规则...${NC}"
-cat > proxy_patch.py << 'EOF'
-import os, json
-
-def get_proxy_mode():
-    with open('proxy_mode.tmp', 'r') as f:
-        return f.read().strip()
+# 修改Python文件添加YouTube分流到xray配置，并增加80端口节点
+echo -e "${BLUE}正在添加YouTube分流功能和80端口节点...${NC}"
+cat > youtube_patch.py << 'EOF'
+# coding: utf-8
+import os, base64, json, subprocess, time
 
 # 读取app.py文件
 with open('app.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
-# 基础配置
-base_config = '''config = {
+# 找到原始配置并替换为包含YouTube分流的配置
+old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
+
+new_config = '''config = {
         "log": {
             "access": "/dev/null",
             "error": "/dev/null",
@@ -495,50 +488,47 @@ base_config = '''config = {
         ],
         "outbounds": [
             {"protocol": "freedom", "tag": "direct"},
+            {
+                "protocol": "vmess",
+                "tag": "youtube",
+                "settings": {
+                    "vnext": [{
+                        "address": "172.233.171.224",
+                        "port": 16416,
+                        "users": [{
+                            "id": "8c1b9bea-cb51-43bb-a65c-0af31bbbf145",
+                            "alterId": 0
+                        }]
+                    }]
+                },
+                "streamSettings": {"network": "tcp"}
+            },
             {"protocol": "blackhole", "tag": "block"}
-        ]
-    }'''
-
-# 根据代理模式添加路由规则
-proxy_mode = get_proxy_mode()
-if proxy_mode == "global":
-    # 全局代理：删除直连，所有流量走代理
-    final_config = base_config.replace(
-        '"outbounds": [{"protocol": "freedom", "tag": "direct"},{"protocol": "blackhole", "tag": "block"}]',
-        '"outbounds": [{"protocol": "freedom", "tag": "proxy"},{"protocol": "blackhole", "tag": "block"}]'
-    )
-else:
-    # 智能代理：中国流量直连，其他代理
-    smart_config = base_config + '''
+        ],
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
                 {
                     "type": "field",
-                    "domain": ["geosite:cn"],
-                    "outboundTag": "direct"
-                },
-                {
-                    "type": "field",
-                    "ip": ["geoip:cn", "geoip:private"],
-                    "outboundTag": "direct"
-                },
-                {
-                    "type": "field",
-                    "outboundTag": "proxy"
+                    "domain": [
+                        "youtube.com", "youtu.be",
+                        "googlevideo.com",
+                        "ytimg.com",
+                        "gstatic.com",
+                        "googleapis.com",
+                        "ggpht.com",
+                        "googleusercontent.com"
+                    ],
+                    "outboundTag": "youtube"
                 }
             ]
-        }'''
-    final_config = smart_config.replace(
-        '"outbounds": [{"protocol": "freedom", "tag": "direct"},{"protocol": "blackhole", "tag": "block"}]',
-        '"outbounds": [{"protocol": "freedom", "tag": "direct"},{"protocol": "freedom", "tag": "proxy"},{"protocol": "blackhole", "tag": "block"}]'
-    )
+        }
+    }'''
 
-# 替换原始配置
-old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
-content = content.replace(old_config, final_config)
+# 替换配置
+content = content.replace(old_config, new_config)
 
-# 修改生成链接函数，移除clash相关配置
+# 修改generate_links函数，添加80端口节点
 old_generate_function = '''# Generate links and subscription content
 async def generate_links(argo_domain):
     meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
@@ -618,32 +608,30 @@ trojan://{UUID}@{CFIP}:80?security=none&type=ws&host={argo_domain}&path=%2Ftroja
  
     return sub_txt'''
 
+# 替换generate_links函数
 content = content.replace(old_generate_function, new_generate_function)
 
 # 写回文件
 with open('app.py', 'w', encoding='utf-8') as f:
     f.write(content)
 
-print(f"代理规则已配置为: {proxy_mode}模式")
+print("YouTube分流配置和80端口节点已成功添加")
 EOF
 
-# 保存代理模式供补丁脚本使用
-echo "$PROXY_MODE" > proxy_mode.tmp
-python3 proxy_patch.py
-rm proxy_patch.py proxy_mode.tmp
+python3 youtube_patch.py
+rm youtube_patch.py
 
-echo -e "${GREEN}代理规则配置完成${NC}"
+echo -e "${GREEN}YouTube分流和80端口节点已集成${NC}"
 
-# 清理旧进程
+# 先清理可能存在的进程
 pkill -f "python3 app.py" > /dev/null 2>&1
-pkill -f "keep_alive_task.sh" > /dev/null 2>&1
 sleep 2
 
-# 启动主服务
+# 启动服务并获取PID
 python3 app.py > app.log 2>&1 &
 APP_PID=$!
 
-# 验证服务启动
+# 验证PID获取成功
 if [ -z "$APP_PID" ] || [ "$APP_PID" -eq 0 ]; then
     echo -e "${RED}获取进程PID失败，尝试直接启动${NC}"
     nohup python3 app.py > app.log 2>&1 &
@@ -659,93 +647,46 @@ fi
 echo -e "${GREEN}服务已在后台启动，PID: $APP_PID${NC}"
 echo -e "${YELLOW}日志文件: $(pwd)/app.log${NC}"
 
-# 重构保活机制
+# 如果设置了保活URL，则启动保活任务
 KEEPALIVE_PID=""
 if [ "$KEEP_ALIVE_HF" = "true" ]; then
     echo -e "${BLUE}正在创建并启动 Hugging Face API 保活任务...${NC}"
-    
-    # 保活脚本增强版
-    cat > keep_alive_task.sh << 'EOF'
-#!/bin/bash
-# 增强版保活脚本：带重试机制和详细日志
-
-RETRY_COUNT=3
-RETRY_DELAY=10
-LOG_FILE="keep_alive_status.log"
-
-# 清理旧日志
-> "$LOG_FILE"
-
-while true; do
-    success=0
-    error_msg=""
-    
-    # 尝试Spaces API
-    for ((i=1; i<=$RETRY_COUNT; i++)); do
-        status_code=$(curl -s -o /dev/null -w "%{http_code}" \
-            --header "Authorization: Bearer $HF_TOKEN" \
-            "https://huggingface.co/api/spaces/$HF_REPO_ID" \
-            --connect-timeout 10 \
-            --max-time 20)
-            
-        if [ "$status_code" -eq 200 ]; then
-            success=1
-            break
-        fi
-        error_msg="Spaces API尝试$i次失败(状态码:$status_code)"
-        sleep $RETRY_DELAY
-    done
-    
-    # Spaces API失败则尝试Models API
-    if [ $success -eq 0 ]; then
-        for ((i=1; i<=$RETRY_COUNT; i++)); do
-            status_code=$(curl -s -o /dev/null -w "%{http_code}" \
-                --header "Authorization: Bearer $HF_TOKEN" \
-                "https://huggingface.co/api/models/$HF_REPO_ID" \
-                --connect-timeout 10 \
-                --max-time 20)
-                
-            if [ "$status_code" -eq 200 ]; then
-                success=1
-                break
-            fi
-            error_msg="$error_msg, Models API尝试$i次失败(状态码:$status_code)"
-            sleep $RETRY_DELAY
-        done
-    fi
-    
-    # 记录结果
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    if [ $success -eq 1 ]; then
-        echo "保活成功 - $timestamp (仓库: $HF_REPO_ID)" > "$LOG_FILE"
-    else
-        echo "保活失败 - $timestamp (原因: $error_msg)" > "$LOG_FILE"
-    fi
-    
-    # 保活间隔(120秒)
-    sleep 120
-done
-EOF
-
-    # 替换变量并设置权限
-    sed -i "s|HF_TOKEN|$HF_TOKEN|g" keep_alive_task.sh
-    sed -i "s|HF_REPO_ID|$HF_REPO_ID|g" keep_alive_task.sh
+    # 创建保活任务脚本
+    echo "#!/bin/bash" > keep_alive_task.sh
+    echo "while true; do" >> keep_alive_task.sh
+    # 核心修改：优先尝试Spaces API，如果失败再尝试Models API
+    echo "    # 尝试 Spaces API" >> keep_alive_task.sh
+    echo "    status_code=\$(curl -s -o /dev/null -w \"%{http_code}\" --header \"Authorization: Bearer $HF_TOKEN\" \"https://huggingface.co/api/spaces/$HF_REPO_ID\")" >> keep_alive_task.sh
+    echo "    if [ \"\$status_code\" -eq 200 ]; then" >> keep_alive_task.sh
+    echo "        echo \"Hugging Face API 保活成功 (Space: $HF_REPO_ID, 状态码: 200) - \$(date '+%Y-%m-%d %H:%M:%S')\" > keep_alive_status.log" >> keep_alive_task.sh
+    echo "    else" >> keep_alive_task.sh
+    echo "        # 尝试 Models API" >> keep_alive_task.sh
+    echo "        status_code_model=\$(curl -s -o /dev/null -w \"%{http_code}\" --header \"Authorization: Bearer $HF_TOKEN\" \"https://huggingface.co/api/models/$HF_REPO_ID\")" >> keep_alive_task.sh
+    echo "        if [ \"\$status_code_model\" -eq 200 ]; then" >> keep_alive_task.sh
+    echo "            echo \"Hugging Face API 保活成功 (Model: $HF_REPO_ID, 状态码: 200) - \$(date '+%Y-%m-%d %H:%M:%S')\" > keep_alive_status.log" >> keep_alive_task.sh
+    echo "        else" >> keep_alive_task.sh
+    echo "            echo \"Hugging Face API 保活失败 (仓库: $HF_REPO_ID, Space API状态: \$status_code, Model API状态: \$status_code_model) - \$(date '+%Y-%m-%d %H:%M:%S')\" > keep_alive_status.log" >> keep_alive_task.sh
+    echo "        fi" >> keep_alive_task.sh
+    echo "    fi" >> keep_alive_task.sh
+    echo "    sleep 120" >> keep_alive_task.sh
+    echo "done" >> keep_alive_task.sh
     chmod +x keep_alive_task.sh
     
-    # 启动保活服务
+    # 使用nohup后台运行保活任务
     nohup ./keep_alive_task.sh >/dev/null 2>&1 &
     KEEPALIVE_PID=$!
-    echo -e "${GREEN}Hugging Face API 保活任务已启动 (PID: $KEEPALIVE_PID)${NC}"
+    echo -e "${GREEN}Hugging Face API 保活任务已启动 (PID: $KEEPALIVE_PID)。${NC}"
 fi
 
 
 echo -e "${BLUE}等待服务启动...${NC}"
 sleep 8
 
-# 检查服务状态
+# 检查服务是否正常运行
 if ! ps -p "$APP_PID" > /dev/null 2>&1; then
     echo -e "${RED}服务启动失败，请检查日志${NC}"
     echo -e "${YELLOW}查看日志: tail -f app.log${NC}"
+    echo -e "${YELLOW}检查端口占用: netstat -tlnp | grep :3000${NC}"
     exit 1
 fi
 
@@ -758,8 +699,8 @@ SUB_PATH_VALUE=$(grep "SUB_PATH = " app.py | cut -d"'" -f4)
 echo -e "${BLUE}等待节点信息生成...${NC}"
 echo -e "${YELLOW}正在等待Argo隧道建立和节点生成，请耐心等待...${NC}"
 
-# 等待节点信息
-MAX_WAIT=600
+# 循环等待节点信息生成，最多等待10分钟
+MAX_WAIT=600  # 10分钟
 WAIT_COUNT=0
 NODE_INFO=""
 
@@ -778,19 +719,35 @@ while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
         fi
     fi
     
+    # 每30秒显示一次等待提示
     if [ $((WAIT_COUNT % 30)) -eq 0 ]; then
         MINUTES=$((WAIT_COUNT / 60))
         SECONDS=$((WAIT_COUNT % 60))
         echo -e "${YELLOW}已等待 ${MINUTES}分${SECONDS}秒，继续等待节点生成...${NC}"
+        echo -e "${BLUE}提示: Argo隧道建立需要时间，请继续等待${NC}"
     fi
     
     sleep 5
     WAIT_COUNT=$((WAIT_COUNT + 5))
 done
 
+# 检查是否成功获取到节点信息
 if [ -z "$NODE_INFO" ]; then
     echo -e "${RED}等待超时！节点信息未能在10分钟内生成${NC}"
-    echo -e "${YELLOW}查看日志: tail -f $(pwd)/app.log${NC}"
+    echo -e "${YELLOW}可能原因：${NC}"
+    echo -e "1. 网络连接问题"
+    echo -e "2. Argo隧道建立失败"
+    echo -e "3. 服务配置错误"
+    echo
+    echo -e "${BLUE}建议操作：${NC}"
+    echo -e "1. 查看日志: ${YELLOW}tail -f $(pwd)/app.log${NC}"
+    echo -e "2. 检查服务: ${YELLOW}ps aux | grep python3${NC}"
+    echo -e "3. 重新运行脚本"
+    echo
+    echo -e "${YELLOW}服务信息：${NC}"
+    echo -e "进程PID: ${BLUE}$APP_PID${NC}"
+    echo -e "服务端口: ${BLUE}$SERVICE_PORT${NC}"
+    echo -e "日志文件: ${YELLOW}$(pwd)/app.log${NC}"
     exit 1
 fi
 
@@ -809,7 +766,6 @@ fi
 echo -e "服务端口: ${BLUE}$SERVICE_PORT${NC}"
 echo -e "UUID: ${BLUE}$CURRENT_UUID${NC}"
 echo -e "订阅路径: ${BLUE}/$SUB_PATH_VALUE${NC}"
-echo -e "代理模式: ${BLUE}$(if [ "$PROXY_MODE" = "global" ]; then echo "全局代理"; else echo "智能代理"; fi)${NC}"
 echo
 
 echo -e "${YELLOW}=== 访问地址 ===${NC}"
@@ -826,14 +782,15 @@ echo
 
 echo -e "${YELLOW}=== 节点信息 ===${NC}"
 DECODED_NODES=$(echo "$NODE_INFO" | base64 -d 2>/dev/null || echo "$NODE_INFO")
+
 echo -e "${GREEN}节点配置:${NC}"
 echo "$DECODED_NODES"
 echo
+
 echo -e "${GREEN}订阅链接:${NC}"
 echo "$NODE_INFO"
 echo
 
-# 保存节点信息
 SAVE_INFO="========================================
                       节点信息保存                      
 ========================================
@@ -842,7 +799,6 @@ SAVE_INFO="========================================
 UUID: $CURRENT_UUID
 服务端口: $SERVICE_PORT
 订阅路径: /$SUB_PATH_VALUE
-代理模式: $(if [ "$PROXY_MODE" = "global" ]; then echo "全局代理"; else echo "智能代理"; fi)
 
 === 访问地址 ==="
 
@@ -876,9 +832,25 @@ if [ "$KEEP_ALIVE_HF" = "true" ]; then
 停止保活服务: pkill -f keep_alive_task.sh && rm keep_alive_task.sh keep_alive_status.log"
 fi
 
+SAVE_INFO="${SAVE_INFO}
+
+=== 分流说明 ===
+- 已集成YouTube分流优化到xray配置
+- YouTube相关域名自动走专用线路
+- 无需额外配置，透明分流"
+
 echo "$SAVE_INFO" > "$NODE_INFO_FILE"
 echo -e "${GREEN}节点信息已保存到 $NODE_INFO_FILE${NC}"
 echo -e "${YELLOW}使用脚本选择选项3或运行带-v参数可随时查看节点信息${NC}"
 
+echo -e "${YELLOW}=== 重要提示 ===${NC}"
+echo -e "${GREEN}部署已完成，节点信息已成功生成${NC}"
+echo -e "${GREEN}可以立即使用订阅地址添加到客户端${NC}"
+echo -e "${GREEN}YouTube分流已集成到xray配置，无需额外设置${NC}"
+echo -e "${GREEN}服务将持续在后台运行${NC}"
+echo
+
 echo -e "${GREEN}部署完成！感谢使用！${NC}"
+
+# 退出脚本，避免重复执行
 exit 0
